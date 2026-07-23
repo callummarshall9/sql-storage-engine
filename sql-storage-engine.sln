@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine", "sql-storage-engine\sql-storage-engine.csproj", "{E675226F-3DF7-410E-B8CC-60ADC60A731F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine.UnitTests", "sql-storage-engine.UnitTests\sql-storage-engine.UnitTests.csproj", "{188F26C9-50B9-4590-B5AC-8800E257A7FC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E675226F-3DF7-410E-B8CC-60ADC60A731F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E675226F-3DF7-410E-B8CC-60ADC60A731F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E675226F-3DF7-410E-B8CC-60ADC60A731F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E675226F-3DF7-410E-B8CC-60ADC60A731F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
