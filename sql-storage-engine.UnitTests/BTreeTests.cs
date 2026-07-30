@@ -1,596 +1,271 @@
-﻿using System.Text.Json;
-using System.Text.Json.Serialization;
-using AwesomeAssertions;
+﻿using AwesomeAssertions;
 
 namespace sql_storage_engine.UnitTests;
 
-public class Tests
+public class BTreeTests
 {
-    [SetUp]
-    public void Setup()
-    {
-    }
-    
     [Test]
-    public void WhenLeftChildSplits_ThenSiblingShouldBeInsertedImmediatelyAfterIt_OrderFour()
+    public void PublicInterfaceShouldExposeIndexOperations()
     {
-        var service = new BalancingTreeService(4);
+        IBPlusTree<int, string> tree = new BalancingTreeService<int, string>(4);
 
-        service.Add(10);
-        service.Add(20);
-        service.Add(30);
-        service.Add(40);
-        service.Add(50);
-        service.Add(60);
-        service.Add(5);
-        service.Add(6);
-        service.Add(7);
-        service.Add(8);
+        tree.Add(20, "twenty");
+        tree.Add(10, "ten");
 
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-        {
-            Values = [7,20,50],
-            Children =
-            [
-                new BalancingTreeNode
-                {
-                    Values = [5,6]
-                },
-                new BalancingTreeNode
-                {
-                    Values = [8,10]
-                },
-                new BalancingTreeNode
-                {
-                    Values = [30,40]
-                },
-                new BalancingTreeNode
-                {
-                    Values = [60]
-                }
-            ]
-        }, options => options
-            .IgnoringCyclicReferences()
-            .ExcludingMembersNamed("Parent"));
+        tree.Order.Should().Be(4);
+        tree.Count.Should().Be(2);
+        tree.ContainsKey(10).Should().BeTrue();
+        tree.TryGetValue(20, out var value).Should().BeTrue();
+        value.Should().Be("twenty");
     }
 
     [Test]
-    public void WhenMiddleChildSplits_ThenSiblingShouldBeInsertedImmediatelyAfterIt_OrderFour()
+    public void DuplicateKeysShouldRetainEveryValue()
     {
-        var service = new BalancingTreeService(4);
+        var tree = new BalancingTreeService<int, string>(4);
 
-        foreach (var value in new[] { 10, 20, 30, 40, 50, 60, 35, 37 })
-            service.Add(value);
+        tree.Add(10, "first");
+        tree.Add(5, "five");
+        tree.Add(10, "second");
+        tree.Add(10, "third");
 
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-        {
-            Values = [20, 37, 50],
-            Children =
-            [
-                new BalancingTreeNode { Values = [10] },
-                new BalancingTreeNode { Values = [30, 35] },
-                new BalancingTreeNode { Values = [40] },
-                new BalancingTreeNode { Values = [60] }
-            ]
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
+        tree.Find(10).Should().Equal("first", "second", "third");
+        tree.Scan().Select(entry => entry.Key).Should().Equal(5, 10, 10, 10);
+        tree.Count.Should().Be(4);
+        ValidateTree(tree);
     }
 
     [Test]
-    public void WhenValuesAreAddedDescending_ThenLeftChildShouldSplitWithoutReorderingSiblings_OrderFour()
+    public void RemoveShouldTargetASpecificKeyValuePair()
     {
-        var service = new BalancingTreeService(4);
+        var tree = new BalancingTreeService<int, string>(4);
+        tree.Add(10, "first");
+        tree.Add(10, "second");
 
-        foreach (var value in new[] { 60, 50, 40, 30, 20, 10, 0 })
-            service.Add(value);
+        tree.Remove(10, "second").Should().BeTrue();
+        tree.Remove(10, "missing").Should().BeFalse();
 
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-        {
-            Values = [20, 40],
-            Children =
-            [
-                new BalancingTreeNode { Values = [0, 10] },
-                new BalancingTreeNode { Values = [30] },
-                new BalancingTreeNode { Values = [50, 60] }
-            ]
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
+        tree.Find(10).Should().Equal("first");
+        tree.Count.Should().Be(1);
     }
 
     [Test]
-    public void WhenInternalNodeSplits_ThenItsChildrenAndParentLinksShouldBePreserved_OrderFour()
+    public void KeyAndValueComparersShouldControlTheirRespectiveOperations()
     {
-        var service = new BalancingTreeService(4);
-        var insertedValues = Enumerable.Range(1, 40).ToArray();
+        var tree = new BalancingTreeService<string, string>(
+            4,
+            StringComparer.OrdinalIgnoreCase,
+            StringComparer.OrdinalIgnoreCase);
 
-        foreach (var value in insertedValues)
+        tree.Add("Customer", "ROW-1");
+
+        tree.ContainsKey("customer").Should().BeTrue();
+        tree.Remove("CUSTOMER", "row-1").Should().BeTrue();
+    }
+
+    [Test]
+    public void BoundsShouldReturnEntriesRatherThanKeysAlone()
+    {
+        var tree = CreateTree((10, "ten"), (20, "twenty"), (30, "thirty"));
+
+        tree.TryGetLowerBound(15, out var lower).Should().BeTrue();
+        lower.Should().Be(new BTreeEntry<int, string>(20, "twenty"));
+
+        tree.TryGetUpperBound(20, out var upper).Should().BeTrue();
+        upper.Should().Be(new BTreeEntry<int, string>(30, "thirty"));
+
+        tree.TryGetUpperBound(30, out _).Should().BeFalse();
+    }
+
+    [Test]
+    public void RangeScansShouldRespectBoundsAndDirection()
+    {
+        var tree = CreateTree(
+            (5, "five"),
+            (10, "ten-a"),
+            (10, "ten-b"),
+            (15, "fifteen"),
+            (20, "twenty"));
+
+        tree.Scan(new BTreeRange<int>(10, 20, IncludeUpperBound: false))
+            .Select(entry => entry.Value)
+            .Should().Equal("ten-a", "ten-b", "fifteen");
+
+        tree.Scan(new BTreeRange<int>(10, 20, Direction: ScanDirection.Descending))
+            .Select(entry => entry.Key)
+            .Should().Equal(20, 15, 10, 10);
+    }
+
+    [TestCase(3, 271)]
+    [TestCase(4, 619)]
+    [TestCase(5, 1451)]
+    [TestCase(6, 2389)]
+    public void RandomRemovalShouldPreserveTreeInvariants(int order, int seed)
+    {
+        var tree = new BalancingTreeService<int, string>(order);
+        var keys = Enumerable.Range(1, 200).ToArray();
+        var removalOrder = keys.ToArray();
+        new Random(seed).Shuffle(removalOrder);
+        var expected = keys.ToList();
+
+        foreach (var key in keys)
+            tree.Add(key, $"row-{key}");
+
+        foreach (var key in removalOrder)
         {
-            service.Add(value);
-
-            if (value == 21)
-            {
-                service.BalancingTree.Root.Children.Count.Should().BeGreaterThan(2,
-                    "the right internal node should have split into two siblings");
-            }
+            tree.Remove(key, $"row-{key}").Should().BeTrue();
+            expected.Remove(key);
+            tree.Scan().Select(entry => entry.Key).Should().Equal(expected);
+            ValidateTree(tree);
         }
 
-        ValidateNode(service.BalancingTree.Root, service.BalancingTree.Order, null, null);
-        ReadInOrder(service.BalancingTree.Root).Should().Equal(insertedValues);
+        tree.BalancingTree.Root.Should().BeOfType<BalancingTreeLeafNode<int, string>>();
+        tree.Count.Should().Be(0);
     }
 
-    [TestCase(3, 173)]
-    [TestCase(4, 947)]
-    [TestCase(5, 2027)]
-    public void WhenValuesAreInsertedInRandomOrder_ThenTreeShouldRemainValid(int order, int seed)
+    [TestCase(3, 367)]
+    [TestCase(4, 821)]
+    [TestCase(5, 1597)]
+    [TestCase(6, 2551)]
+    public void InterleavedOperationsWithDuplicateKeysShouldRemainValid(int order, int seed)
     {
-        var service = new BalancingTreeService(order);
-        var values = Enumerable.Range(1, 200).ToArray();
+        var tree = new BalancingTreeService<int, int>(order);
+        var expected = new List<BTreeEntry<int, int>>();
         var random = new Random(seed);
-        random.Shuffle(values);
+        var nextValue = 0;
 
-        foreach (var value in values)
-            service.Add(value);
-
-        ValidateNode(service.BalancingTree.Root, order, null, null);
-        ReadInOrder(service.BalancingTree.Root).Should().Equal(Enumerable.Range(1, 200));
-    }
-
-    [Test]
-    public void WhenDuplicateValuesAreInserted_ThenEveryOccurrenceShouldBeRetainedInSortedOrder()
-    {
-        var service = new BalancingTreeService(4);
-        int[] values = [10, 5, 20, 10, 15, 5, 10, 20, 10, 15];
-
-        foreach (var value in values)
-            service.Add(value);
-
-        ReadInOrder(service.BalancingTree.Root).Should().Equal(values.Order());
-        ReadInOrder(service.BalancingTree.Root).Should().HaveCount(values.Length);
-        ValidateNodeAllowingDuplicates(service.BalancingTree.Root, service.BalancingTree.Order, null, null);
-    }
-
-    [Test]
-    public void WhenAllInsertedValuesAreDuplicates_ThenEveryOccurrenceShouldBeRetained()
-    {
-        var service = new BalancingTreeService(4);
-        var values = Enumerable.Repeat(10, 40).ToArray();
-
-        foreach (var value in values)
-            service.Add(value);
-
-        ReadInOrder(service.BalancingTree.Root).Should().Equal(values);
-        ValidateNodeAllowingDuplicates(service.BalancingTree.Root, service.BalancingTree.Order, null, null);
-    }
-
-    [Test]
-    public void WhenIAddOneAndTwo_ThenBalancingTreeShouldHaveOneNOdeWithTwoValues()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
+        for (var operation = 0; operation < 500; operation++)
         {
-            Order = 3, 
-            Root = new BalancingTreeNode
+            var key = random.Next(1, 31);
+
+            if (random.Next(2) == 0)
             {
-                Values = [1, 2]
+                var entry = new BTreeEntry<int, int>(key, nextValue++);
+                tree.Add(entry.Key, entry.Value);
+                expected.Add(entry);
             }
-        });
-    }
-    
-    [Test]
-    public void WhenIAddThree_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
-        {
-            Order = 3, 
-            Root = new BalancingTreeNode 
+            else
             {
-                Values = [2],
-                Children = [new BalancingTreeNode() { Values = [1] }, new BalancingTreeNode() { Values = [3]}],
+                var entry = expected.FirstOrDefault(candidate => candidate.Key == key);
+                var exists = expected.Contains(entry);
+
+                tree.Remove(key, entry.Value).Should().Be(exists);
+                if (exists)
+                    expected.Remove(entry);
             }
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddFour_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
-        {
-            Order = 3, 
-            Root = new BalancingTreeNode 
-            {
-                Values = [2],
-                Children = [new BalancingTreeNode() { Values = [1] }, new BalancingTreeNode() { Values = [3,4]}],
-            }
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddFive_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
 
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
-        {
-            Order = 3, 
-            Root = new BalancingTreeNode 
-            {
-                Values = [2, 4],
-                Children = [new BalancingTreeNode()
-                {
-                    Values = [1]
-                }, 
-                new BalancingTreeNode()
-                {
-                    Values = [3]
-                }, 
-                new BalancingTreeNode()
-                {
-                    Values = [5]
-                }],
-            }
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddSix_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        service.Add(6);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
-        {
-            Order = 3, 
-            Root = new BalancingTreeNode 
-            {
-                Values = [2, 4],
-                Children = [new BalancingTreeNode()
-                    {
-                        Values = [1]
-                    }, 
-                    new BalancingTreeNode()
-                    {
-                        Values = [3]
-                    }, 
-                    new BalancingTreeNode()
-                    {
-                        Values = [5, 6]
-                    }],
-            }
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddSeven_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        service.Add(6);
-        service.Add(7);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-
-        
-        service.BalancingTree.Should().BeEquivalentTo(new BalancingTree
-        {
-            Order = 3, 
-            Root = new BalancingTreeNode 
-            {
-                Values = [4],
-                Children = [new BalancingTreeNode()
-                    {
-                        Values = [2],
-                        Children = [
-                            new BalancingTreeNode()
-                            {
-                                Values = [1]
-                            },
-                            new BalancingTreeNode()
-                            {
-                                Values = [3]
-                            }
-                        ]
-                    }, 
-                    new BalancingTreeNode()
-                    {
-                        Values = [6],
-                        Children = [
-                            new BalancingTreeNode()
-                            {
-                                Values = [5]
-                            },
-                            new BalancingTreeNode()
-                            {
-                                Values = [7]
-                            }
-                        ]
-                    }
-                ]
-            }
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-
-    [Test]
-    public void WhenIAddEight_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        service.Add(6);
-        service.Add(7);
-        service.Add(8);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-            {
-                Values = [4],
-                Children =
-                [
-                    new BalancingTreeNode
-                    {
-                        Values = [2],
-                        Children =
-                        [
-                            new BalancingTreeNode
-                            {
-                                Values = [1]
-                            },
-                            new BalancingTreeNode
-                            {
-                                Values = [3]
-                            }
-                        ]
-                    },
-                    new BalancingTreeNode
-                    {
-                        Values = [6],
-                        Children = [
-                            new BalancingTreeNode()
-                            {
-                                Values = [5]
-                            },
-                            new BalancingTreeNode()
-                            {
-                                Values = [7, 8]
-                            }
-                        ]
-                    }
-                ]
-            }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddNine_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        service.Add(6);
-        service.Add(7);
-        service.Add(8);
-        service.Add(9);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-        {
-            Values = [4],
-            Children =
-            [
-                new BalancingTreeNode
-                {
-                    Values = [2],
-                    Children =
-                    [
-                        new BalancingTreeNode
-                        {
-                            Values = [1]
-                        },
-                        new BalancingTreeNode
-                        {
-                            Values = [3]
-                        }
-                    ]
-                },
-                new BalancingTreeNode
-                {
-                    Values = [6, 8],
-                    Children = [
-                        new BalancingTreeNode()
-                        {
-                            Values = [5]
-                        },
-                        new BalancingTreeNode()
-                        {
-                            Values = [7]
-                        },
-                        new BalancingTreeNode()
-                        {
-                            Values = [9]
-                        }
-                    ]
-                }
-            ]
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-    
-    [Test]
-    public void WhenIAddTen_ThenBalancingTreeShouldHaveMNodes()
-    {
-        var service = new BalancingTreeService(3);
-        
-        service.Add(1);
-        service.Add(2);
-        service.Add(3);
-        service.Add(4);
-        service.Add(5);
-        service.Add(6);
-        service.Add(7);
-        service.Add(8);
-        service.Add(9);
-        service.Add(10);
-        
-        TestContext.Out.Write(System.Text.Json.JsonSerializer.Serialize(service.BalancingTree, new JsonSerializerOptions( ) { ReferenceHandler = ReferenceHandler.IgnoreCycles, WriteIndented = true}));
-
-        service.BalancingTree.Root.Should().BeEquivalentTo(new BalancingTreeNode
-        {
-            Values = [4],
-            Children =
-            [
-                new BalancingTreeNode
-                {
-                    Values = [2],
-                    Children =
-                    [
-                        new BalancingTreeNode
-                        {
-                            Values = [1]
-                        },
-                        new BalancingTreeNode
-                        {
-                            Values = [3]
-                        }
-                    ]
-                },
-                new BalancingTreeNode
-                {
-                    Values = [6, 8],
-                    Children = [
-                        new BalancingTreeNode()
-                        {
-                            Values = [5]
-                        },
-                        new BalancingTreeNode()
-                        {
-                            Values = [7]
-                        },
-                        new BalancingTreeNode()
-                        {
-                            Values = [9, 10]
-                        }
-                    ]
-                }
-            ]
-        }, options => options.IgnoringCyclicReferences().ExcludingMembersNamed("Parent"));
-    }
-
-    private static void ValidateNode(BalancingTreeNode node, int order, int? minimum, int? maximum)
-    {
-        node.Values.Should().BeInAscendingOrder();
-        node.Values.Count.Should().BeLessThan(order);
-        node.Values.Should().OnlyContain(value =>
-            (!minimum.HasValue || value > minimum.Value) &&
-            (!maximum.HasValue || value < maximum.Value));
-
-        if (node.Children.Count == 0)
-            return;
-
-        node.Children.Count.Should().Be(node.Values.Count + 1);
-
-        for (var index = 0; index < node.Children.Count; index++)
-        {
-            var child = node.Children[index];
-            child.Parent.Should().BeSameAs(node);
-
-            var childMinimum = index == 0 ? minimum : node.Values[index - 1];
-            var childMaximum = index == node.Values.Count ? maximum : node.Values[index];
-            ValidateNode(child, order, childMinimum, childMaximum);
+            tree.Scan().Select(entry => entry.Key)
+                .Should().Equal(expected.Select(entry => entry.Key).Order());
+            tree.Count.Should().Be(expected.Count);
+            ValidateTree(tree);
         }
     }
 
-    private static void ValidateNodeAllowingDuplicates(
-        BalancingTreeNode node,
+    [Test]
+    public void RootSplitShouldCreateDistinctLeafAndInternalNodeTypes()
+    {
+        var tree = new BalancingTreeService<int, string>(3);
+
+        tree.BalancingTree.Root.Should().BeOfType<BalancingTreeLeafNode<int, string>>();
+
+        tree.Add(10, "ten");
+        tree.Add(20, "twenty");
+        tree.Add(30, "thirty");
+
+        var root = tree.BalancingTree.Root
+            .Should().BeOfType<BalancingTreeInternalNode<int, string>>().Subject;
+        root.Children.Should().AllBeOfType<BalancingTreeLeafNode<int, string>>();
+        root.Keys.Should().Equal(30);
+    }
+
+    private static BalancingTreeService<int, string> CreateTree(
+        params (int Key, string Value)[] entries)
+    {
+        var tree = new BalancingTreeService<int, string>(4);
+
+        foreach (var entry in entries)
+            tree.Add(entry.Key, entry.Value);
+
+        return tree;
+    }
+
+    private static void ValidateTree<TKey, TValue>(
+        BalancingTreeService<TKey, TValue> tree)
+    {
+        var comparer = Comparer<TKey>.Default;
+        var leafDepths = new List<int>();
+        var leaves = new List<BalancingTreeLeafNode<TKey, TValue>>();
+
+        ValidateNode(
+            tree.BalancingTree.Root,
+            tree.Order,
+            comparer,
+            true,
+            0,
+            leafDepths,
+            leaves);
+
+        leafDepths.Distinct().Should().ContainSingle();
+
+        for (var index = 0; index < leaves.Count; index++)
+        {
+            leaves[index].Previous.Should().BeSameAs(index == 0 ? null : leaves[index - 1]);
+            leaves[index].Next.Should().BeSameAs(index == leaves.Count - 1 ? null : leaves[index + 1]);
+        }
+    }
+
+    private static void ValidateNode<TKey, TValue>(
+        BalancingTreeNode<TKey, TValue> node,
         int order,
-        int? minimum,
-        int? maximum)
+        IComparer<TKey> comparer,
+        bool isRoot,
+        int depth,
+        List<int> leafDepths,
+        List<BalancingTreeLeafNode<TKey, TValue>> leaves)
     {
-        node.Values.Should().BeInAscendingOrder();
-        node.Values.Count.Should().BeLessThan(order);
-        node.Values.Should().OnlyContain(value =>
-            (!minimum.HasValue || value >= minimum.Value) &&
-            (!maximum.HasValue || value <= maximum.Value));
+        node.Keys.Should().BeInAscendingOrder(comparer);
+        node.Keys.Count.Should().BeLessThan(order);
 
-        if (node.Children.Count == 0)
-            return;
-
-        node.Children.Count.Should().Be(node.Values.Count + 1);
-
-        for (var index = 0; index < node.Children.Count; index++)
+        if (node is BalancingTreeLeafNode<TKey, TValue> leaf)
         {
-            var child = node.Children[index];
-            child.Parent.Should().BeSameAs(node);
+            if (!isRoot)
+                leaf.Entries.Count.Should().BeGreaterThanOrEqualTo(order / 2);
 
-            var childMinimum = index == 0 ? minimum : node.Values[index - 1];
-            var childMaximum = index == node.Values.Count ? maximum : node.Values[index];
-            ValidateNodeAllowingDuplicates(child, order, childMinimum, childMaximum);
+            leaf.Children.Should().BeEmpty();
+            leafDepths.Add(depth);
+            leaves.Add(leaf);
+            return;
+        }
+
+        var internalNode = node.Should()
+            .BeOfType<BalancingTreeInternalNode<TKey, TValue>>().Subject;
+        internalNode.Children.Count.Should().Be(internalNode.Keys.Count + 1);
+
+        if (isRoot)
+            internalNode.Children.Count.Should().BeGreaterThanOrEqualTo(2);
+        else
+            internalNode.Children.Count.Should().BeGreaterThanOrEqualTo((order + 1) / 2);
+
+        for (var index = 0; index < internalNode.Children.Count; index++)
+        {
+            var child = internalNode.Children[index];
+            child.Parent.Should().BeSameAs(internalNode);
+            ValidateNode(child, order, comparer, false, depth + 1, leafDepths, leaves);
+
+            if (index > 0)
+            {
+                comparer.Compare(internalNode.Keys[index - 1], GetMinimumKey(child))
+                    .Should().Be(0);
+            }
         }
     }
 
-    private static IEnumerable<int> ReadInOrder(BalancingTreeNode node)
+    private static TKey GetMinimumKey<TKey, TValue>(
+        BalancingTreeNode<TKey, TValue> node)
     {
-        for (var index = 0; index < node.Values.Count; index++)
-        {
-            if (node.Children.Count > 0)
-            {
-                foreach (var value in ReadInOrder(node.Children[index]))
-                    yield return value;
-            }
+        while (node is BalancingTreeInternalNode<TKey, TValue> internalNode)
+            node = internalNode.Children[0];
 
-            yield return node.Values[index];
-        }
-
-        if (node.Children.Count > 0)
-        {
-            foreach (var value in ReadInOrder(node.Children[^1]))
-                yield return value;
-        }
+        return ((BalancingTreeLeafNode<TKey, TValue>)node).Entries[0].Key;
     }
 }
