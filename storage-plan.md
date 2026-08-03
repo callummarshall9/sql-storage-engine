@@ -1327,6 +1327,12 @@ backup boundaries. A discovery pass fixes their ordinal order; subsequent runs t
 reopen through the recovery entry point, assert fully committed or fully absent state according to the durability
 point, and run heap/index/overflow integrity validation. This makes every interruption deterministic and repeatable.
 
+Partial-write qualification produces deterministic prefix, suffix, single-sector, and fixed-seed random mixtures of
+old and new page images. Torn pages must fail the complete-page checksum. Recovery accepts only a separately
+checksum-verified full-page image; otherwise open stops with `UnrecoverablePageCorruptionException`. WAL damage is
+classified separately: a short final record is truncated to the last complete boundary, while malformed/checksum-
+invalid content inside the log is corruption and stops recovery. Complete-write loops remain mandatory for short I/O.
+
 Encryption at rest can be deferred, but the format should reserve identifiers for checksum and encryption algorithms. If encryption is added, authentication must cover page identity and metadata as well as payload bytes.
 
 ## 39. Schema and format evolution
