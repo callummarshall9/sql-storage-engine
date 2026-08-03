@@ -1217,6 +1217,11 @@ captures the end LSN after concurrent work, and records both positions plus the 
 compose by retaining from the oldest active start and are disposed on success, cancellation, and failure. The copy
 does not acquire the database-wide writer lock; consistency is established by the physical pages and retained WAL.
 
+Point-in-time restore validates every archived segment against the backup database identity and one contiguous
+timeline, selects records at or below the exact durable target LSN, and excludes later commits. Missing coverage and
+wrong-database archives have distinct storage errors before destination creation. A successful restore writes a new
+timeline descriptor whose parent and fork LSN prevent accidental continuation with the source timeline's WAL.
+
 ## 36. Transaction isolation and concurrency model
 
 The final concurrency design must specify observable SQL behavior, not only locks.
