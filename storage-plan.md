@@ -842,6 +842,13 @@ the deterministic victim: it is rolled back, its pins and locks are released, an
 `DeadlockException`. The manager exposes the resolved-deadlock count and most recent victim identifier for
 diagnostics. Acyclic waits remain queued and are not counted.
 
+Read-committed row reads take a shared lock only for the physical read, so a later read in the same transaction may
+observe a newer committed value. Repeatable-read retains shared row locks until transaction completion; mutations
+take exclusive row locks and also retain them to prevent lost updates. A relocated update retains the old-row lock
+and immediately locks the returned `RowId`. Table scans apply the same policy row by row: read-committed releases
+each row after decoding, while repeatable-read retains every visited row lock. Serializable scans additionally use
+the index-range rules described below; row locks alone do not prevent phantoms.
+
 ## 25. Failure cases that must remain safe
 
 The design must account for failures:

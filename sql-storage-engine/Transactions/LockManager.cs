@@ -325,6 +325,9 @@ public sealed class LockingTransaction : IDisposable
         return _lockManager.ConvertAsync(Transaction.Id, resource, mode, cancellationToken);
     }
 
+    /// <summary>Releases one owned lock early when the selected isolation level permits it.</summary>
+    public bool Release(LockResource resource) => _lockManager.Release(Transaction.Id, resource);
+
     public void Commit()
     {
         try { Transaction.Commit(); }
