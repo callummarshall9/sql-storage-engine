@@ -1,4 +1,5 @@
 using sql_storage_engine.Identifiers;
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Transactions;
 
@@ -11,6 +12,27 @@ public sealed class LockManager : ILockManager
     private readonly object _sync = new();
     private readonly Dictionary<LockResource, ResourceState> _resources = [];
     private readonly Dictionary<TransactionId, HashSet<LockResource>> _owned = [];
+    private readonly Dictionary<TransactionId, Action> _victimHandlers = [];
+    private long _deadlockCount;
+    private TransactionId? _lastDeadlockVictim;
+
+    /// <summary>Gets the number of cycles resolved by this manager.</summary>
+    public long DeadlockCount { get { lock (_sync) return _deadlockCount; } }
+
+    /// <summary>Gets the most recently selected deadlock victim, or null before the first cycle.</summary>
+    public TransactionId? LastDeadlockVictim { get { lock (_sync) return _lastDeadlockVictim; } }
+
+    /// <summary>Registers the synchronous rollback and resource-release callback used if a transaction is selected as a victim.</summary>
+    public void RegisterVictimHandler(TransactionId transactionId, Action handler)
+    {
+        if (transactionId.Value == 0) throw new ArgumentOutOfRangeException(nameof(transactionId));
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_sync)
+        {
+            if (!_victimHandlers.TryAdd(transactionId, handler))
+                throw new InvalidOperationException($"Transaction {transactionId} already has a deadlock-victim handler.");
+        }
+    }
 
     public ValueTask AcquireAsync(TransactionId transactionId, LockResource resource, LockMode mode,
         CancellationToken cancellationToken = default)
@@ -29,6 +51,7 @@ public sealed class LockManager : ILockManager
             state.Waiting.Enqueue(request);
             RegisterCancellation(resource, request, cancellationToken);
             ProcessQueue(resource, state);
+            ResolveDeadlocks();
             return new ValueTask(request.Completion.Task);
         }
     }
@@ -51,6 +74,7 @@ public sealed class LockManager : ILockManager
             state.Waiting.Enqueue(request);
             RegisterCancellation(resource, request, cancellationToken);
             ProcessQueue(resource, state);
+            ResolveDeadlocks();
             return new ValueTask(request.Completion.Task);
         }
     }
@@ -81,7 +105,94 @@ public sealed class LockManager : ILockManager
                 RemoveResourceIfEmpty(pair.Key, pair.Value);
             }
             _owned.Remove(transactionId);
+            _victimHandlers.Remove(transactionId);
         }
+    }
+
+    private void ResolveDeadlocks()
+    {
+        while (FindCycle() is { Count: > 0 } cycle)
+        {
+            var victim = cycle.MaxBy(transactionId => transactionId.Value);
+            _deadlockCount++;
+            _lastDeadlockVictim = victim;
+            _victimHandlers.TryGetValue(victim, out var handler);
+            try { handler?.Invoke(); }
+            finally { AbortVictim(victim); }
+        }
+    }
+
+    private HashSet<TransactionId>? FindCycle()
+    {
+        var graph = BuildWaitForGraph();
+        var visited = new HashSet<TransactionId>();
+        var active = new HashSet<TransactionId>();
+        var path = new List<TransactionId>();
+        foreach (var start in graph.Keys.OrderBy(transactionId => transactionId.Value))
+            if (FindCycleFrom(start, graph, visited, active, path) is { } cycle) return cycle;
+        return null;
+    }
+
+    private static HashSet<TransactionId>? FindCycleFrom(TransactionId current,
+        IReadOnlyDictionary<TransactionId, HashSet<TransactionId>> graph, HashSet<TransactionId> visited,
+        HashSet<TransactionId> active, List<TransactionId> path)
+    {
+        if (active.Contains(current))
+        {
+            var start = path.IndexOf(current);
+            return path.Skip(start).ToHashSet();
+        }
+        if (!visited.Add(current)) return null;
+        active.Add(current);
+        path.Add(current);
+        if (graph.TryGetValue(current, out var dependencies))
+            foreach (var dependency in dependencies.OrderBy(transactionId => transactionId.Value))
+                if (FindCycleFrom(dependency, graph, visited, active, path) is { } cycle) return cycle;
+        path.RemoveAt(path.Count - 1);
+        active.Remove(current);
+        return null;
+    }
+
+    private Dictionary<TransactionId, HashSet<TransactionId>> BuildWaitForGraph()
+    {
+        var graph = new Dictionary<TransactionId, HashSet<TransactionId>>();
+        foreach (var state in _resources.Values)
+        {
+            var earlierWaiters = new List<TransactionId>();
+            foreach (var request in state.Waiting)
+            {
+                if (!graph.TryGetValue(request.TransactionId, out var dependencies))
+                {
+                    dependencies = [];
+                    graph.Add(request.TransactionId, dependencies);
+                }
+                foreach (var granted in state.Granted)
+                    if (granted.Key != request.TransactionId && !LockRules.AreCompatible(granted.Value, request.Mode))
+                        dependencies.Add(granted.Key);
+                foreach (var earlier in earlierWaiters)
+                    if (earlier != request.TransactionId) dependencies.Add(earlier);
+                earlierWaiters.Add(request.TransactionId);
+            }
+        }
+        return graph;
+    }
+
+    private void AbortVictim(TransactionId victim)
+    {
+        foreach (var pair in _resources.ToArray())
+        {
+            pair.Value.Granted.Remove(victim);
+            foreach (var request in pair.Value.Waiting.Where(request => request.TransactionId == victim).ToArray())
+                if (RemoveWaiter(pair.Value, request))
+                {
+                    request.CancellationRegistration.Unregister();
+                    request.Completion.TrySetException(new DeadlockException(victim));
+                }
+            ProcessQueue(pair.Key, pair.Value);
+            RemoveResourceIfEmpty(pair.Key, pair.Value);
+        }
+        _owned.Remove(victim);
+        _victimHandlers.Remove(victim);
     }
 
     private ResourceState GetOrAdd(LockResource resource)
@@ -190,11 +301,15 @@ public sealed class LockManager : ILockManager
 public sealed class LockingTransaction : IDisposable
 {
     private readonly ILockManager _lockManager;
+    private readonly Action _releasePins;
 
-    public LockingTransaction(Transaction transaction, ILockManager lockManager)
+    public LockingTransaction(Transaction transaction, ILockManager lockManager, Action? releasePins = null)
     {
         Transaction = transaction ?? throw new ArgumentNullException(nameof(transaction));
         _lockManager = lockManager ?? throw new ArgumentNullException(nameof(lockManager));
+        _releasePins = releasePins ?? (() => { });
+        if (lockManager is LockManager concrete)
+            concrete.RegisterVictimHandler(transaction.Id, AbortForDeadlock);
     }
 
     public Transaction Transaction { get; }
@@ -227,4 +342,23 @@ public sealed class LockingTransaction : IDisposable
         try { Transaction.Dispose(); }
         finally { _lockManager.ReleaseAll(Transaction.Id); }
     }
+
+    private void AbortForDeadlock()
+    {
+        try
+        {
+            if (Transaction.State == TransactionState.Active) Transaction.Rollback();
+        }
+        finally { _releasePins(); }
+    }
+}
+
+/// <summary>Reports that a deterministic deadlock victim was rolled back so surviving transactions can continue.</summary>
+public sealed class DeadlockException : StorageException
+{
+    public DeadlockException(TransactionId victimTransactionId)
+        : base($"Transaction {victimTransactionId} was selected as the deadlock victim.") =>
+        VictimTransactionId = victimTransactionId;
+
+    public TransactionId VictimTransactionId { get; }
 }

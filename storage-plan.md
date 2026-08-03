@@ -836,6 +836,12 @@ Conversions retain their already-granted mode and take their normal position in 
 failure, and disposal release every lock attributed to the transaction; cancelling a waiter removes it before later
 requests are reconsidered.
 
+Blocked requests form a wait-for graph containing incompatible holders and earlier FIFO waiters. Cycle detection
+runs whenever a request remains blocked. The transaction with the greatest `TransactionId` in the detected cycle is
+the deterministic victim: it is rolled back, its pins and locks are released, and its blocked operation receives a
+`DeadlockException`. The manager exposes the resolved-deadlock count and most recent victim identifier for
+diagnostics. Acyclic waits remain queued and are not counted.
+
 ## 25. Failure cases that must remain safe
 
 The design must account for failures:
