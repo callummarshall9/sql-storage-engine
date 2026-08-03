@@ -894,6 +894,11 @@ Checks should include:
 - Every table row has required index entries.
 - Unique indexes contain no duplicate logical keys.
 
+Integrity results use stable finding codes and never mutate pages. Physical traversal is capped before allocating or
+reading file-controlled page counts, validates every checksum/header and type-specific heap/index/overflow layout,
+and follows the free list with a visited set. Optional logical cross-check input reports `INDEX_ENTRY_MISSING` and
+`INDEX_ENTRY_STALE` by comparing live heap `RowId` values with index references.
+
 ## 27. Suggested project structure
 
 ```text
