@@ -1,7 +1,7 @@
 namespace sql_storage_engine.Identifiers;
 
-public readonly record struct RowId(PageId PageId, SlotId SlotId, SlotGeneration SlotGeneration)
+public readonly record struct RowId(PageId PageId, SlotId SlotId, SlotGeneration Generation)
 {
     public override string ToString()
-        => $"{PageId}{SlotId}{SlotGeneration}";
+        => $"row:{PageId.Value}/{SlotId.Value}/{Generation.Value}";
 }

@@ -2,9 +2,10 @@ namespace sql_storage_engine.Identifiers;
 
 public readonly record struct DatabaseId(Guid Value)
 {
+    /// <summary>Creates a new globally unique database identifier.</summary>
     public static DatabaseId New()
-        => new DatabaseId(Guid.NewGuid());
+        => new(Guid.NewGuid());
 
     public override string ToString()
-        => "DatabaseId:" + Value;
+        => $"database:{Value:D}";
 }
