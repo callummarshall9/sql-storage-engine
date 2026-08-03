@@ -58,6 +58,42 @@ public sealed class PersistentBPlusTree
 
     public PageId RootPageId => _rootReference.RootPageId;
 
+    /// <summary>Removes one exact key/RowId pair and borrows from a lending leaf sibling when needed.</summary>
+    public async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        PageId? current = await FindLeafAsync(key, equalRoutesLeft: true, cancellationToken).ConfigureAwait(false);
+        HashSet<PageId> visited = [];
+        while (current is { } leafId && visited.Add(leafId))
+        {
+            var leaf = await ReadLeafAsync(leafId, cancellationToken).ConfigureAwait(false);
+            var entryIndex = leaf.Entries.ToList().FindIndex(entry => entry.Key.Equals(key) && entry.RowId == rowId);
+            if (entryIndex >= 0)
+            {
+                var entries = leaf.Entries.ToList();
+                var removedMinimum = entryIndex == 0;
+                entries.RemoveAt(entryIndex);
+                var updated = leaf with { Entries = entries.AsReadOnly() };
+                if (leaf.ParentPageId is null)
+                {
+                    await WriteLeafAsync(updated, cancellationToken).ConfigureAwait(false);
+                    return true;
+                }
+                if (entries.Count < 2)
+                    updated = await BorrowLeafEntryAsync(updated, cancellationToken).ConfigureAwait(false);
+                else
+                    await WriteLeafAsync(updated, cancellationToken).ConfigureAwait(false);
+                if (updated.Entries.Count > 0 && removedMinimum)
+                    await RefreshAncestorMinimumAsync(updated.PageId, updated.Entries[0].Key, cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            if (leaf.Entries.Count > 0 && leaf.Entries[^1].Key.CompareTo(key) > 0) return false;
+            current = leaf.NextPageId;
+        }
+        if (current is not null) throw new StorageCorruptionException("Cycle detected while locating duplicate index entries.");
+        return false;
+    }
+
     /// <summary>Inserts into a leaf only when it already has capacity.</summary>
     public async ValueTask<IndexInsertResult> InsertWithoutSplitAsync(IndexKey key, RowId rowId,
         CancellationToken cancellationToken = default)
@@ -343,6 +379,49 @@ public sealed class PersistentBPlusTree
                 throw new StorageFormatException("Cannot assign a parent to a non-index page.");
         }
         pin.MarkDirty(new LogSequenceNumber(0));
+    }
+
+    private async ValueTask<LeafIndexPage> BorrowLeafEntryAsync(LeafIndexPage leaf,
+        CancellationToken cancellationToken)
+    {
+        if (leaf.PreviousPageId is { } previousId)
+        {
+            var left = await ReadLeafAsync(previousId, cancellationToken).ConfigureAwait(false);
+            if (left.ParentPageId == leaf.ParentPageId && left.Entries.Count > 2)
+            {
+                var leftEntries = left.Entries.ToList();
+                var leafEntries = leaf.Entries.ToList();
+                leafEntries.Insert(0, leftEntries[^1]);
+                leftEntries.RemoveAt(leftEntries.Count - 1);
+                var updatedLeft = left with { Entries = leftEntries.AsReadOnly() };
+                var updatedLeaf = leaf with { Entries = leafEntries.AsReadOnly() };
+                await WriteLeafAsync(updatedLeft, cancellationToken).ConfigureAwait(false);
+                await WriteLeafAsync(updatedLeaf, cancellationToken).ConfigureAwait(false);
+                await RefreshAncestorMinimumAsync(updatedLeaf.PageId, updatedLeaf.Entries[0].Key, cancellationToken)
+                    .ConfigureAwait(false);
+                return updatedLeaf;
+            }
+        }
+        if (leaf.NextPageId is { } nextId)
+        {
+            var right = await ReadLeafAsync(nextId, cancellationToken).ConfigureAwait(false);
+            if (right.ParentPageId == leaf.ParentPageId && right.Entries.Count > 2)
+            {
+                var rightEntries = right.Entries.ToList();
+                var leafEntries = leaf.Entries.ToList();
+                leafEntries.Add(rightEntries[0]);
+                rightEntries.RemoveAt(0);
+                var updatedLeaf = leaf with { Entries = leafEntries.AsReadOnly() };
+                var updatedRight = right with { Entries = rightEntries.AsReadOnly() };
+                await WriteLeafAsync(updatedLeaf, cancellationToken).ConfigureAwait(false);
+                await WriteLeafAsync(updatedRight, cancellationToken).ConfigureAwait(false);
+                await RefreshAncestorMinimumAsync(updatedRight.PageId, updatedRight.Entries[0].Key, cancellationToken)
+                    .ConfigureAwait(false);
+                return updatedLeaf;
+            }
+        }
+        await WriteLeafAsync(leaf, cancellationToken).ConfigureAwait(false);
+        return leaf;
     }
 
     private async ValueTask RefreshAncestorMinimumAsync(PageId childId, IndexKey minimum,
