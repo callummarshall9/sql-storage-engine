@@ -1,0 +1,5 @@
+# Write-ahead log format
+
+WAL version 1 uses a checksummed 48-byte segment header containing canonical big-endian UUID bytes for the database identity, a nonzero timeline, and segment number. Records are length-delimited and contain version, type, LSN, previous transaction LSN, transaction ID, reserved bytes, checksum, and payload. All numeric fields except canonical UUID bytes are little-endian. Payloads are bounded to 16 MiB.
+
+Record types are begin, physical page change, commit, rollback, and checkpoint. CRC-32 protects each complete header and payload. A declared record extending beyond EOF is an incomplete tail; malformed lengths, unknown values, or checksum failures in a complete envelope are corruption.
