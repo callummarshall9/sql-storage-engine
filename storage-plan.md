@@ -1316,6 +1316,12 @@ Required protections include:
 - Define secure temporary-file creation for backup and recovery.
 - Fuzz page, row, key, catalog, overflow, WAL, and backup decoders.
 
+Persistent decoder fuzzing uses committed golden seeds, fixed random seeds, per-target input ceilings, and an
+execution timeout. Expected argument/format/corruption rejection is normal; unexpected exceptions and hangs are
+failures. Every failure is synchronously handed to a regression-fixture sink with its exact input before the run
+continues. Core entry points cover database/page headers, heap slots, rows, keys, catalog, overflow, index pages,
+WAL, and backup manifests.
+
 Encryption at rest can be deferred, but the format should reserve identifiers for checksum and encryption algorithms. If encryption is added, authentication must cover page identity and metadata as well as payload bytes.
 
 ## 39. Schema and format evolution
