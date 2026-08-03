@@ -58,7 +58,7 @@ public sealed class TableStorageInsertTests
         rows.Should().HaveCount(1);
     }
 
-    private sealed class Fixture : IAsyncDisposable
+    internal sealed class Fixture : IAsyncDisposable
     {
         private readonly InMemoryPageStore _pages;
         private readonly BufferPool _pool;
@@ -70,7 +70,7 @@ public sealed class TableStorageInsertTests
         public TableIndex[] Indexes { get; }
         public TableStorage Table { get; }
 
-        public static async Task<Fixture> CreateAsync(bool uniqueFirst = false)
+        public static async Task<Fixture> CreateAsync(bool uniqueFirst = false, int inlineThreshold = 16)
         {
             var pages = new InMemoryPageStore();
             var pool = new BufferPool(pages, 16, leaveOpen: true);
@@ -90,7 +90,7 @@ public sealed class TableStorageInsertTests
                     new PersistentBPlusTree(pool, pages, new MutableIndexRootReference(root), unique)));
             }
             var overflow = new OverflowManager(pool, pages);
-            var table = new TableStorage(definition, heap, new OverflowRowCodec(overflow, 16), overflow, indexes);
+            var table = new TableStorage(definition, heap, new OverflowRowCodec(overflow, inlineThreshold), overflow, indexes);
             return new Fixture(pages, pool, definition, heap, indexes.ToArray(), table);
         }
         public async ValueTask DisposeAsync() { await _pool.DisposeAsync(); await _pages.DisposeAsync(); }

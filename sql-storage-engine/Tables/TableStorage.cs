@@ -9,7 +9,23 @@ using sql_storage_engine.Storage;
 namespace sql_storage_engine.Tables;
 
 /// <summary>Binds catalog index metadata to its persistent tree.</summary>
-public sealed record TableIndex(CatalogIndex Definition, PersistentBPlusTree Tree);
+public sealed class TableIndex(CatalogIndex definition, PersistentBPlusTree tree)
+{
+    public CatalogIndex Definition { get; } = definition ?? throw new ArgumentNullException(nameof(definition));
+    public PersistentBPlusTree Tree { get; } = tree ?? throw new ArgumentNullException(nameof(tree));
+    public int AddCount { get; private set; }
+    public int RemoveCount { get; private set; }
+    internal async ValueTask AddAsync(IndexKey key, RowId rowId, CancellationToken token)
+    { await Tree.InsertAsync(key, rowId, token).ConfigureAwait(false); AddCount++; }
+    internal async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken token = default)
+    { var removed = await Tree.RemoveAsync(key, rowId, token).ConfigureAwait(false); if (removed) RemoveCount++; return removed; }
+}
+
+/// <summary>Describes a successful logical row update and whether its physical identifier changed.</summary>
+public sealed record TableUpdateResult(bool Updated, RowId PreviousRowId, RowId CurrentRowId)
+{
+    public bool Relocated => PreviousRowId != CurrentRowId;
+}
 
 /// <summary>Reports a failed logical table mutation and storage roots requiring deferred cleanup.</summary>
 public sealed class TableMutationException : StorageException
@@ -63,7 +79,7 @@ public sealed class TableStorage
             foreach (var index in _indexes)
             {
                 var key = CatalogIndexKey.Encode(row, _table, index.Definition);
-                await index.Tree.InsertAsync(key, rowId.Value, cancellationToken).ConfigureAwait(false);
+                await index.AddAsync(key, rowId.Value, cancellationToken).ConfigureAwait(false);
                 insertedIndexes.Add((index, key));
             }
             return rowId.Value;
@@ -72,7 +88,7 @@ public sealed class TableStorage
         {
             List<PageId> unreclaimed = [];
             for (var index = insertedIndexes.Count - 1; index >= 0; index--)
-                try { await insertedIndexes[index].Index.Tree.RemoveAsync(insertedIndexes[index].Key, rowId!.Value).ConfigureAwait(false); }
+                try { await insertedIndexes[index].Index.RemoveAsync(insertedIndexes[index].Key, rowId!.Value).ConfigureAwait(false); }
                 catch (StorageException) { unreclaimed.Add(insertedIndexes[index].Index.Definition.RootPageId); }
             if (rowId is { } insertedRow)
                 try { if (!await _heap.DeleteAsync(insertedRow).ConfigureAwait(false)) unreclaimed.Add(insertedRow.PageId); }
@@ -92,5 +108,73 @@ public sealed class TableStorage
         var result = await _heap.ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
         if (result.Result != TableHeapLookupResult.Found) return (false, null);
         return (true, await _rowCodec.DecodeAsync(result.Row, _schema, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>Applies selected columns while maintaining changed keys and all RowId references after relocation.</summary>
+    public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        var current = await _heap.ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
+        if (current.Result != TableHeapLookupResult.Found) return new TableUpdateResult(false, rowId, rowId);
+        var oldBytes = current.Row.ToArray();
+        var oldRow = await _rowCodec.DecodeAsync(current.Row, _schema, cancellationToken).ConfigureAwait(false);
+        var replacement = await _rowCodec.ApplyUpdateAsync(current.Row, update, _schema, cancellationToken).ConfigureAwait(false);
+        var newRow = await _rowCodec.DecodeAsync(replacement.Bytes, _schema, cancellationToken).ConfigureAwait(false);
+        var heapResult = await _heap.UpdateAsync(rowId, replacement.Bytes, cancellationToken).ConfigureAwait(false);
+        RowId newRowId = rowId;
+        var relocated = heapResult == HeapUpdateResult.RelocationRequired;
+        if (relocated) newRowId = await _heap.InsertAsync(replacement.Bytes, cancellationToken).ConfigureAwait(false);
+        else if (heapResult != HeapUpdateResult.Updated)
+        {
+            foreach (var reference in replacement.NewlyAllocated) await _overflow.FreeAsync(reference).ConfigureAwait(false);
+            return new TableUpdateResult(false, rowId, rowId);
+        }
+
+        List<(TableIndex Index, IndexKey OldKey, IndexKey NewKey, bool Removed, bool Added)> mutations = [];
+        try
+        {
+            foreach (var index in _indexes)
+            {
+                var oldKey = CatalogIndexKey.Encode(oldRow, _table, index.Definition);
+                var newKey = CatalogIndexKey.Encode(newRow, _table, index.Definition);
+                if (!relocated && oldKey.Equals(newKey)) continue;
+                if (!await index.RemoveAsync(oldKey, rowId, cancellationToken).ConfigureAwait(false))
+                    throw new StorageCorruptionException($"Index {index.Definition.Id} is missing the row being updated.");
+                mutations.Add((index, oldKey, newKey, true, false));
+                await index.AddAsync(newKey, newRowId, cancellationToken).ConfigureAwait(false);
+                mutations[^1] = mutations[^1] with { Added = true };
+            }
+            if (relocated && !await _heap.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false))
+                throw new StorageCorruptionException("Relocated row's previous heap slot could not be deleted.");
+            foreach (var reference in replacement.Retired) await _overflow.FreeAsync(reference, cancellationToken).ConfigureAwait(false);
+            return new TableUpdateResult(true, rowId, newRowId);
+        }
+        catch (Exception exception)
+        {
+            List<PageId> unreclaimed = [];
+            for (var index = mutations.Count - 1; index >= 0; index--)
+            {
+                var mutation = mutations[index];
+                try
+                {
+                    if (mutation.Added) await mutation.Index.RemoveAsync(mutation.NewKey, newRowId).ConfigureAwait(false);
+                    if (mutation.Removed) await mutation.Index.AddAsync(mutation.OldKey, rowId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (StorageException) { unreclaimed.Add(mutation.Index.Definition.RootPageId); }
+            }
+            try
+            {
+                if (relocated) await _heap.DeleteAsync(newRowId).ConfigureAwait(false);
+                else if (await _heap.UpdateAsync(rowId, oldBytes).ConfigureAwait(false) != HeapUpdateResult.Updated)
+                    unreclaimed.Add(rowId.PageId);
+            }
+            catch (StorageException) { unreclaimed.Add(newRowId.PageId); }
+            foreach (var reference in replacement.NewlyAllocated)
+                try { await _overflow.FreeAsync(reference).ConfigureAwait(false); }
+                catch (StorageException) { unreclaimed.Add(reference.FirstPageId); }
+            throw new TableMutationException("Table update failed and the previous logical state was restored.",
+                unreclaimed.Distinct().ToArray(), exception);
+        }
     }
 }
