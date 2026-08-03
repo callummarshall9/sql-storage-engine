@@ -1,0 +1,6 @@
+{
+  "Name": "legacy-v0",
+  "SourceVersion": 0,
+  "TargetVersion": 1,
+  "ExpectedRows": ["items:1:alpha", "items:2:beta"]
+}

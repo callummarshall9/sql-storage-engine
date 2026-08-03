@@ -1367,6 +1367,11 @@ materializes the physical header, opens it read-only, validates WAL and integrit
 Future versions are rejected before destination creation or modification. Migration tests reuse these fixtures and
 checkpoint every idempotent version boundary so interrupted upgrades can resume.
 
+Format upgrade requires an independently verified backup, an explicit adjacent source-to-target step, and a durable
+sidecar progress record written atomically before and after each idempotent boundary. Resume skips completed steps.
+Unsupported sources and downgrades fail before database or progress modification. Completion is published only
+after the upgraded database passes integrity validation; activity and current progress/status remain observable.
+
 ## 40. Maintenance and space reclamation
 
 Normal use creates fragmentation and retired storage. Production maintenance includes:
