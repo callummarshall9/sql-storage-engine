@@ -4,7 +4,7 @@ using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Logging;
 
-public enum WalRecordType : ushort { Begin = 1, PageChange = 2, Commit = 3, Rollback = 4, Checkpoint = 5 }
+public enum WalRecordType : ushort { Begin = 1, PageChange = 2, Commit = 3, Rollback = 4, Checkpoint = 5, Compensation = 6 }
 public sealed record WalSegmentHeader(DatabaseId DatabaseId, ulong Timeline, ulong SegmentNumber);
 public sealed record WalRecord(LogSequenceNumber Lsn, LogSequenceNumber PreviousLsn,
     TransactionId TransactionId, WalRecordType Type, ReadOnlyMemory<byte> Payload);
