@@ -12,6 +12,9 @@ public enum IndexInsertResult
     SplitRequired
 }
 
+/// <summary>Describes an exact index deletion and pages that may be reclaimed after it is safe to do so.</summary>
+public sealed record IndexDeleteResult(bool Removed, IReadOnlyList<PageId> RetiredPageIds);
+
 public interface IIndexRootReference
 {
     PageId RootPageId { get; }
@@ -58,10 +61,19 @@ public sealed class PersistentBPlusTree
 
     public PageId RootPageId => _rootReference.RootPageId;
 
-    /// <summary>Removes one exact key/RowId pair and borrows from a lending leaf sibling when needed.</summary>
-    public async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken cancellationToken = default)
+    /// <summary>Removes one exact key/RowId pair.</summary>
+    public async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken cancellationToken = default) =>
+        (await DeleteAsync(key, rowId, cancellationToken).ConfigureAwait(false)).Removed;
+
+    /// <summary>
+    /// Removes one exact key/RowId pair and reports pages retired by merges. Reported pages remain allocated and must not be
+    /// reused until a later transaction/reclamation layer establishes that no reader can reference them.
+    /// </summary>
+    public async ValueTask<IndexDeleteResult> DeleteAsync(IndexKey key, RowId rowId,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
+        List<PageId> retiredPageIds = [];
         PageId? current = await FindLeafAsync(key, equalRoutesLeft: true, cancellationToken).ConfigureAwait(false);
         HashSet<PageId> visited = [];
         while (current is { } leafId && visited.Add(leafId))
@@ -77,21 +89,25 @@ public sealed class PersistentBPlusTree
                 if (leaf.ParentPageId is null)
                 {
                     await WriteLeafAsync(updated, cancellationToken).ConfigureAwait(false);
-                    return true;
+                    return new IndexDeleteResult(true, retiredPageIds.AsReadOnly());
                 }
                 if (entries.Count < 2)
-                    updated = await BorrowLeafEntryAsync(updated, cancellationToken).ConfigureAwait(false);
+                    await RebalanceLeafAsync(updated, retiredPageIds, cancellationToken).ConfigureAwait(false);
                 else
+                {
                     await WriteLeafAsync(updated, cancellationToken).ConfigureAwait(false);
-                if (updated.Entries.Count > 0 && removedMinimum)
-                    await RefreshAncestorMinimumAsync(updated.PageId, updated.Entries[0].Key, cancellationToken).ConfigureAwait(false);
-                return true;
+                    if (removedMinimum)
+                        await RefreshAncestorMinimumAsync(updated.PageId, updated.Entries[0].Key, cancellationToken)
+                            .ConfigureAwait(false);
+                }
+                return new IndexDeleteResult(true, retiredPageIds.AsReadOnly());
             }
-            if (leaf.Entries.Count > 0 && leaf.Entries[^1].Key.CompareTo(key) > 0) return false;
+            if (leaf.Entries.Count > 0 && leaf.Entries[^1].Key.CompareTo(key) > 0)
+                return new IndexDeleteResult(false, retiredPageIds.AsReadOnly());
             current = leaf.NextPageId;
         }
         if (current is not null) throw new StorageCorruptionException("Cycle detected while locating duplicate index entries.");
-        return false;
+        return new IndexDeleteResult(false, retiredPageIds.AsReadOnly());
     }
 
     /// <summary>Inserts into a leaf only when it already has capacity.</summary>
@@ -381,13 +397,19 @@ public sealed class PersistentBPlusTree
         pin.MarkDirty(new LogSequenceNumber(0));
     }
 
-    private async ValueTask<LeafIndexPage> BorrowLeafEntryAsync(LeafIndexPage leaf,
+    private async ValueTask RebalanceLeafAsync(LeafIndexPage leaf, List<PageId> retiredPageIds,
         CancellationToken cancellationToken)
     {
-        if (leaf.PreviousPageId is { } previousId)
+        if (leaf.ParentPageId is not { } parentId)
+            throw new StorageCorruptionException("A non-root leaf has no parent.");
+        var parent = await ReadInternalAsync(parentId, cancellationToken).ConfigureAwait(false);
+        var childIndex = parent.Children.ToList().IndexOf(leaf.PageId);
+        if (childIndex < 0) throw new StorageCorruptionException($"Parent {parentId} does not reference leaf {leaf.PageId}.");
+
+        if (childIndex > 0)
         {
-            var left = await ReadLeafAsync(previousId, cancellationToken).ConfigureAwait(false);
-            if (left.ParentPageId == leaf.ParentPageId && left.Entries.Count > 2)
+            var left = await ReadLeafAsync(parent.Children[childIndex - 1], cancellationToken).ConfigureAwait(false);
+            if (left.Entries.Count > 2)
             {
                 var leftEntries = left.Entries.ToList();
                 var leafEntries = leaf.Entries.ToList();
@@ -399,13 +421,13 @@ public sealed class PersistentBPlusTree
                 await WriteLeafAsync(updatedLeaf, cancellationToken).ConfigureAwait(false);
                 await RefreshAncestorMinimumAsync(updatedLeaf.PageId, updatedLeaf.Entries[0].Key, cancellationToken)
                     .ConfigureAwait(false);
-                return updatedLeaf;
+                return;
             }
         }
-        if (leaf.NextPageId is { } nextId)
+        if (childIndex + 1 < parent.Children.Count)
         {
-            var right = await ReadLeafAsync(nextId, cancellationToken).ConfigureAwait(false);
-            if (right.ParentPageId == leaf.ParentPageId && right.Entries.Count > 2)
+            var right = await ReadLeafAsync(parent.Children[childIndex + 1], cancellationToken).ConfigureAwait(false);
+            if (right.Entries.Count > 2)
             {
                 var rightEntries = right.Entries.ToList();
                 var leafEntries = leaf.Entries.ToList();
@@ -415,13 +437,177 @@ public sealed class PersistentBPlusTree
                 var updatedRight = right with { Entries = rightEntries.AsReadOnly() };
                 await WriteLeafAsync(updatedLeaf, cancellationToken).ConfigureAwait(false);
                 await WriteLeafAsync(updatedRight, cancellationToken).ConfigureAwait(false);
+                await RefreshAncestorMinimumAsync(updatedLeaf.PageId, updatedLeaf.Entries[0].Key, cancellationToken)
+                    .ConfigureAwait(false);
                 await RefreshAncestorMinimumAsync(updatedRight.PageId, updatedRight.Entries[0].Key, cancellationToken)
                     .ConfigureAwait(false);
-                return updatedLeaf;
+                return;
             }
         }
-        await WriteLeafAsync(leaf, cancellationToken).ConfigureAwait(false);
-        return leaf;
+
+        if (childIndex > 0)
+        {
+            var left = await ReadLeafAsync(parent.Children[childIndex - 1], cancellationToken).ConfigureAwait(false);
+            var mergedEntries = left.Entries.Concat(leaf.Entries).ToArray();
+            if (!LeafIndexPageCodec.CanFit(_bufferPool.PageSize, mergedEntries))
+                throw new StorageResourceExhaustedException("Underfilled leaf siblings cannot be merged.");
+            await WriteLeafAsync(left with { NextPageId = leaf.NextPageId, Entries = mergedEntries }, cancellationToken)
+                .ConfigureAwait(false);
+            if (leaf.NextPageId is { } nextId)
+            {
+                var next = await ReadLeafAsync(nextId, cancellationToken).ConfigureAwait(false);
+                await WriteLeafAsync(next with { PreviousPageId = left.PageId }, cancellationToken).ConfigureAwait(false);
+            }
+            retiredPageIds.Add(leaf.PageId);
+            await RemoveChildFromInternalAsync(parent, childIndex, retiredPageIds, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var rightSibling = await ReadLeafAsync(parent.Children[1], cancellationToken).ConfigureAwait(false);
+        var rightMergedEntries = leaf.Entries.Concat(rightSibling.Entries).ToArray();
+        if (!LeafIndexPageCodec.CanFit(_bufferPool.PageSize, rightMergedEntries))
+            throw new StorageResourceExhaustedException("Underfilled leaf siblings cannot be merged.");
+        await WriteLeafAsync(leaf with { NextPageId = rightSibling.NextPageId, Entries = rightMergedEntries }, cancellationToken)
+            .ConfigureAwait(false);
+        if (rightSibling.NextPageId is { } followingId)
+        {
+            var following = await ReadLeafAsync(followingId, cancellationToken).ConfigureAwait(false);
+            await WriteLeafAsync(following with { PreviousPageId = leaf.PageId }, cancellationToken).ConfigureAwait(false);
+        }
+        retiredPageIds.Add(rightSibling.PageId);
+        await RemoveChildFromInternalAsync(parent, 1, retiredPageIds, cancellationToken).ConfigureAwait(false);
+        await RefreshAncestorMinimumAsync(leaf.PageId, rightMergedEntries[0].Key, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask RemoveChildFromInternalAsync(InternalIndexPage node, int childIndex,
+        List<PageId> retiredPageIds, CancellationToken cancellationToken)
+    {
+        var children = node.Children.ToList();
+        var separators = node.Separators.ToList();
+        children.RemoveAt(childIndex);
+        separators.RemoveAt(childIndex == 0 ? 0 : childIndex - 1);
+        if (children.Count >= 2)
+        {
+            await WriteInternalAsync(node with { Children = children.AsReadOnly(), Separators = separators.AsReadOnly() },
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        if (node.ParentPageId is null)
+        {
+            await SetParentAsync(children[0], null, cancellationToken).ConfigureAwait(false);
+            await _rootReference.UpdateRootAsync(children[0], cancellationToken).ConfigureAwait(false);
+            retiredPageIds.Add(node.PageId);
+            return;
+        }
+        await RebalanceInternalAsync(node with { Children = children.AsReadOnly(), Separators = separators.AsReadOnly() },
+            retiredPageIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask RebalanceInternalAsync(InternalIndexPage node, List<PageId> retiredPageIds,
+        CancellationToken cancellationToken)
+    {
+        var grandparent = await ReadInternalAsync(node.ParentPageId!.Value, cancellationToken).ConfigureAwait(false);
+        var nodeIndex = grandparent.Children.ToList().IndexOf(node.PageId);
+        if (nodeIndex < 0) throw new StorageCorruptionException($"Parent {grandparent.PageId} does not reference {node.PageId}.");
+
+        if (nodeIndex > 0)
+        {
+            var left = await ReadInternalAsync(grandparent.Children[nodeIndex - 1], cancellationToken).ConfigureAwait(false);
+            if (left.Children.Count > 2)
+            {
+                var moved = left.Children[^1];
+                var leftChildren = left.Children.Take(left.Children.Count - 1).ToArray();
+                var leftSeparators = left.Separators.Take(left.Separators.Count - 1).ToArray();
+                var nodeChildren = node.Children.Prepend(moved).ToArray();
+                var oldMinimum = await GetSubtreeMinimumAsync(node.Children[0], cancellationToken).ConfigureAwait(false);
+                var nodeSeparators = node.Separators.Prepend(oldMinimum).ToArray();
+                await WriteInternalAsync(left with { Children = leftChildren, Separators = leftSeparators }, cancellationToken)
+                    .ConfigureAwait(false);
+                await WriteInternalAsync(node with { Children = nodeChildren, Separators = nodeSeparators }, cancellationToken)
+                    .ConfigureAwait(false);
+                await SetParentAsync(moved, node.PageId, cancellationToken).ConfigureAwait(false);
+                var movedMinimum = await GetSubtreeMinimumAsync(moved, cancellationToken).ConfigureAwait(false);
+                await RefreshAncestorMinimumAsync(node.PageId, movedMinimum, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
+        if (nodeIndex + 1 < grandparent.Children.Count)
+        {
+            var right = await ReadInternalAsync(grandparent.Children[nodeIndex + 1], cancellationToken).ConfigureAwait(false);
+            if (right.Children.Count > 2)
+            {
+                var moved = right.Children[0];
+                var nodeChildren = node.Children.Append(moved).ToArray();
+                var movedMinimum = await GetSubtreeMinimumAsync(moved, cancellationToken).ConfigureAwait(false);
+                var nodeSeparators = node.Separators.Append(movedMinimum).ToArray();
+                var rightChildren = right.Children.Skip(1).ToArray();
+                var rightSeparators = right.Separators.Skip(1).ToArray();
+                await WriteInternalAsync(node with { Children = nodeChildren, Separators = nodeSeparators }, cancellationToken)
+                    .ConfigureAwait(false);
+                await WriteInternalAsync(right with { Children = rightChildren, Separators = rightSeparators }, cancellationToken)
+                    .ConfigureAwait(false);
+                await SetParentAsync(moved, node.PageId, cancellationToken).ConfigureAwait(false);
+                var rightMinimum = await GetSubtreeMinimumAsync(rightChildren[0], cancellationToken).ConfigureAwait(false);
+                await RefreshAncestorMinimumAsync(right.PageId, rightMinimum, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        if (nodeIndex > 0)
+        {
+            var left = await ReadInternalAsync(grandparent.Children[nodeIndex - 1], cancellationToken).ConfigureAwait(false);
+            var nodeMinimum = await GetSubtreeMinimumAsync(node.Children[0], cancellationToken).ConfigureAwait(false);
+            var mergedChildren = left.Children.Concat(node.Children).ToArray();
+            var mergedSeparators = left.Separators.Concat(new[] { nodeMinimum }).Concat(node.Separators).ToArray();
+            if (!InternalIndexPageCodec.CanFit(_bufferPool.PageSize, mergedSeparators))
+                throw new StorageResourceExhaustedException("Underfilled internal siblings cannot be merged.");
+            await WriteInternalAsync(left with { Children = mergedChildren, Separators = mergedSeparators }, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var child in node.Children)
+                await SetParentAsync(child, left.PageId, cancellationToken).ConfigureAwait(false);
+            retiredPageIds.Add(node.PageId);
+            await RemoveChildFromInternalAsync(grandparent, nodeIndex, retiredPageIds, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var rightNode = await ReadInternalAsync(grandparent.Children[1], cancellationToken).ConfigureAwait(false);
+        var rightMinimumForMerge = await GetSubtreeMinimumAsync(rightNode.Children[0], cancellationToken).ConfigureAwait(false);
+        var combinedChildren = node.Children.Concat(rightNode.Children).ToArray();
+        var combinedSeparators = node.Separators.Concat(new[] { rightMinimumForMerge }).Concat(rightNode.Separators).ToArray();
+        if (!InternalIndexPageCodec.CanFit(_bufferPool.PageSize, combinedSeparators))
+            throw new StorageResourceExhaustedException("Underfilled internal siblings cannot be merged.");
+        await WriteInternalAsync(node with { Children = combinedChildren, Separators = combinedSeparators }, cancellationToken)
+            .ConfigureAwait(false);
+        foreach (var child in rightNode.Children)
+            await SetParentAsync(child, node.PageId, cancellationToken).ConfigureAwait(false);
+        retiredPageIds.Add(rightNode.PageId);
+        await RemoveChildFromInternalAsync(grandparent, 1, retiredPageIds, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<InternalIndexPage> ReadInternalAsync(PageId pageId, CancellationToken cancellationToken)
+    {
+        using var pin = await GetPinAsync(pageId, cancellationToken).ConfigureAwait(false);
+        return InternalIndexPageCodec.Read(pin.Memory.Span, pageId);
+    }
+
+    private async ValueTask<IndexKey> GetSubtreeMinimumAsync(PageId pageId, CancellationToken cancellationToken)
+    {
+        var current = pageId;
+        for (var height = 0; height < MaximumTreeHeight; height++)
+        {
+            using var pin = await GetPinAsync(current, cancellationToken).ConfigureAwait(false);
+            var type = PageHeaderCodec.Read(pin.Memory.Span).PageType;
+            if (type == PageType.BPlusTreeLeaf)
+            {
+                var leaf = LeafIndexPageCodec.Read(pin.Memory.Span, current);
+                if (leaf.Entries.Count == 0) throw new StorageCorruptionException("A non-root subtree contains an empty leaf.");
+                return leaf.Entries[0].Key;
+            }
+            if (type != PageType.BPlusTreeInternal)
+                throw new StorageFormatException($"Expected index page, found {type} at {current}.");
+            current = InternalIndexPageCodec.Read(pin.Memory.Span, current).Children[0];
+        }
+        throw new StorageCorruptionException($"Index tree exceeds maximum height {MaximumTreeHeight}.");
     }
 
     private async ValueTask RefreshAncestorMinimumAsync(PageId childId, IndexKey minimum,

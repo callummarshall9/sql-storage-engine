@@ -9,6 +9,48 @@ namespace sql_storage_engine.UnitTests;
 public sealed class PersistentBPlusTreeDeleteTests
 {
     [Test]
+    public async Task Delete_WithCancellation_DoesNotMutateRootLeaf()
+    {
+        await using var store = new InMemoryPageStore();
+        var root = await PersistentBPlusTreeInsertTests.WriteLeafAsync(store, new[] { Entry(1, 10), Entry(2, 20) });
+        await using var pool = new BufferPool(store, 2, leaveOpen: true);
+        var tree = new PersistentBPlusTree(pool, store, new MutableIndexRootReference(root));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        var action = async () => await tree.DeleteAsync(Key(1), Row(10), cancellation.Token);
+
+        await action.Should().ThrowAsync<OperationCanceledException>();
+        (await tree.FindAsync(Key(1))).Should().Equal(Row(10));
+    }
+
+    [Test]
+    public async Task LeafMerge_ContractsRootMaintainsLinksAndReportsRetiredPages()
+    {
+        await using var store = new InMemoryPageStore();
+        var left = await PersistentBPlusTreeInsertTests.WriteLeafAsync(store, new[] { Entry(1, 10), Entry(2, 20) });
+        var right = await PersistentBPlusTreeInsertTests.WriteLeafAsync(store, new[] { Entry(3, 30), Entry(4, 40) });
+        var root = await store.AllocateAsync(PageType.BPlusTreeInternal);
+        await RewriteLeaf(store, left, root, null, right);
+        await RewriteLeaf(store, right, root, left, null);
+        await PersistentBPlusTreeInsertTests.WriteInternalAsync(store, root, new[] { Key(3) }, new[] { left, right });
+        await using var pool = new BufferPool(store, 4, leaveOpen: true);
+        var rootReference = new MutableIndexRootReference(root);
+        var tree = new PersistentBPlusTree(pool, store, rootReference);
+
+        var result = await tree.DeleteAsync(Key(1), Row(10));
+
+        result.Removed.Should().BeTrue();
+        rootReference.RootPageId.Should().Be(left);
+        result.RetiredPageIds.Should().BeEquivalentTo(new[] { right, root });
+        var merged = await ReadLeaf(pool, left);
+        merged.ParentPageId.Should().BeNull();
+        merged.PreviousPageId.Should().BeNull();
+        merged.NextPageId.Should().BeNull();
+        merged.Entries.Select(entry => entry.Key).Should().Equal(Key(2), Key(3), Key(4));
+    }
+
+    [Test]
     public async Task Remove_DeletesOnlyRequestedDuplicateAndMissingPairDoesNotMutatePages()
     {
         await using var store = new InMemoryPageStore();
@@ -72,6 +114,51 @@ public sealed class PersistentBPlusTreeDeleteTests
         finally { Directory.Delete(directory, true); }
     }
 
+    [Test]
+    public async Task FixedSeedInsertDeleteAndReopen_AgreesWithReferenceAndRebalancesInternalPages()
+    {
+        const int seed = 74021;
+        var directory = Path.Combine(Path.GetTempPath(), $"sql-index-delete-random-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "database.sse");
+        var expected = Enumerable.Range(0, 48).ToDictionary(value => value, value => Row((ulong)value + 1));
+        var random = new Random(seed);
+        var deletionOrder = expected.Keys.OrderBy(_ => random.Next()).Take(32).ToArray();
+        PageId reopenedRoot;
+        List<PageId> retired = [];
+        try
+        {
+            await using (var database = await PageDatabase.CreateAsync(path))
+            {
+                var initialRoot = await PersistentBPlusTreeInsertTests.WriteLeafAsync(database, []);
+                var rootReference = new MutableIndexRootReference(initialRoot);
+                await using var pool = new BufferPool(database, 8, leaveOpen: true);
+                var tree = new PersistentBPlusTree(pool, database, rootReference);
+                foreach (var pair in expected) await tree.InsertAsync(LargeKey(pair.Key), pair.Value);
+                foreach (var value in deletionOrder)
+                {
+                    var result = await tree.DeleteAsync(LargeKey(value), expected[value]);
+                    result.Removed.Should().BeTrue($"fixed seed {seed} must delete value {value}");
+                    retired.AddRange(result.RetiredPageIds);
+                    expected.Remove(value);
+                }
+                reopenedRoot = rootReference.RootPageId;
+                await pool.FlushAllAsync();
+            }
+
+            retired.Should().NotBeEmpty($"fixed seed {seed} must exercise merge retirement");
+            await using var reopened = await PageDatabase.OpenAsync(path);
+            await using var reopenedPool = new BufferPool(reopened, 8, leaveOpen: true);
+            var reopenedTree = new PersistentBPlusTree(reopenedPool, reopened, new MutableIndexRootReference(reopenedRoot));
+            var actual = new List<LeafIndexEntry>();
+            await foreach (var entry in reopenedTree.ScanAsync(new IndexRange(LargeKey(0), LargeKey(255))))
+                actual.Add(entry);
+            actual.Select(entry => entry.RowId).Should().Equal(expected.OrderBy(pair => pair.Key).Select(pair => pair.Value),
+                $"fixed seed {seed} must survive close and reopen");
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     private static async Task RewriteLeaf(IPageStore store, PageId id, PageId parent, PageId? previous, PageId? next)
     {
         var bytes = new byte[store.PageSize];
@@ -88,4 +175,11 @@ public sealed class PersistentBPlusTreeDeleteTests
     private static IndexKey Key(byte value) => PersistentBPlusTreeInsertTests.Key(value);
     private static RowId Row(ulong value) => PersistentBPlusTreeInsertTests.Row(value);
     private static LeafIndexEntry Entry(byte key, ulong row) => PersistentBPlusTreeInsertTests.Entry(key, row);
+    private static IndexKey LargeKey(int value)
+    {
+        var bytes = new byte[900];
+        bytes[0] = (byte)(value >> 8);
+        bytes[1] = (byte)value;
+        return new IndexKey(bytes);
+    }
 }

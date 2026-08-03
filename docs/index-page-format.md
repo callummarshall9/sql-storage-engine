@@ -19,3 +19,7 @@ Each forward-growing 16-byte separator slot contains a four-byte key offset, two
 ## Leaf page
 
 The 72-byte leaf header stores nullable parent, previous, and next IDs at offsets 32, 41, and 50; entry count at 59; slot-directory end at 61; key-data start at 65; and three reserved zero bytes at 69. Each 24-byte slot stores key offset/length, two reserved bytes, row page ID, row slot ID, two reserved bytes, and row generation. Keys are contiguously packed backward and nondecreasing, allowing duplicate keys. Row page zero is invalid. Empty leaf pages are valid, including an empty tree root.
+
+## Deletion and page retirement
+
+Deletion targets an exact key and row-ID pair. Underfilled nodes first borrow from a sibling with spare entries; otherwise they merge, update leaf links and parent separators, and contract an internal root that has only one remaining child. A delete result reports every page made unreachable by these operations. Retired pages intentionally remain allocated: callers must defer reuse until a future transaction-aware reclamation layer proves that no active reader can still reference them.
