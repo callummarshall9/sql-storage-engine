@@ -47,3 +47,9 @@ public sealed class StorageResourceExhaustedException : StorageException
 {
     public StorageResourceExhaustedException(string message) : base(message) { }
 }
+
+/// <summary>Indicates that an insertion would duplicate a logical key in a unique index.</summary>
+public sealed class DuplicateIndexKeyException : StorageException
+{
+    public DuplicateIndexKeyException() : base("The unique index already contains the requested logical key.") { }
+}

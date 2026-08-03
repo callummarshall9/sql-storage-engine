@@ -48,8 +48,10 @@ public sealed class PersistentBPlusTree
     private readonly BufferPool _bufferPool;
     private readonly IPageAllocator _allocator;
     private readonly IIndexRootReference _rootReference;
+    private readonly bool _isUnique;
 
-    public PersistentBPlusTree(BufferPool bufferPool, IPageAllocator allocator, IIndexRootReference rootReference)
+    public PersistentBPlusTree(BufferPool bufferPool, IPageAllocator allocator, IIndexRootReference rootReference,
+        bool isUnique = false)
     {
         ArgumentNullException.ThrowIfNull(bufferPool);
         ArgumentNullException.ThrowIfNull(allocator);
@@ -57,9 +59,11 @@ public sealed class PersistentBPlusTree
         _bufferPool = bufferPool;
         _allocator = allocator;
         _rootReference = rootReference;
+        _isUnique = isUnique;
     }
 
     public PageId RootPageId => _rootReference.RootPageId;
+    public bool IsUnique => _isUnique;
 
     /// <summary>Removes one exact key/RowId pair.</summary>
     public async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken cancellationToken = default) =>
@@ -116,6 +120,9 @@ public sealed class PersistentBPlusTree
     {
         ArgumentNullException.ThrowIfNull(key);
         if (rowId.PageId.Value == 0) throw new ArgumentOutOfRangeException(nameof(rowId));
+        // This preflight establishes logical behavior only; transactional race protection belongs to the locking layer.
+        if (_isUnique && (await FindAsync(key, cancellationToken).ConfigureAwait(false)).Count != 0)
+            throw new DuplicateIndexKeyException();
         var leafId = await FindLeafAsync(key, equalRoutesLeft: false, cancellationToken).ConfigureAwait(false);
         IndexKey? oldMinimum;
         using (var pin = await GetPinAsync(leafId, cancellationToken).ConfigureAwait(false))

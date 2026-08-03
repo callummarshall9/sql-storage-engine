@@ -23,3 +23,7 @@ The 72-byte leaf header stores nullable parent, previous, and next IDs at offset
 ## Deletion and page retirement
 
 Deletion targets an exact key and row-ID pair. Underfilled nodes first borrow from a sibling with spare entries; otherwise they merge, update leaf links and parent separators, and contract an internal root that has only one remaining child. A delete result reports every page made unreachable by these operations. Retired pages intentionally remain allocated: callers must defer reuse until a future transaction-aware reclamation layer proves that no active reader can still reference them.
+
+## Unique keys and nulls
+
+Uniqueness is index metadata supplied when the tree is opened; it does not alter the page encoding. A unique tree performs an exact logical-key lookup before insertion and rejects an existing key regardless of row ID. Transactional protection for concurrent check/insert races is deferred to the locking layer. `IndexKey` is an opaque, non-empty byte sequence and therefore has no implicit null value. A key encoder that supports SQL null must emit an explicit canonical null encoding; that encoding participates in uniqueness like any other key, so this version permits at most one encoded null in a unique index. Non-unique indexes accept repeated null encodings and all other duplicate keys.
