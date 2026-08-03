@@ -1212,6 +1212,11 @@ size, WAL LSN bounds, UTC creation time, engine version, byte sizes, and SHA-256
 every file independently. Restore always targets a new directory, revalidates the manifest and checksums, then opens
 the copied database and validates every allocated page header and checksum before reporting success.
 
+Online backup registers WAL retention at the current durable start LSN before allowing the copy boundary to run,
+captures the end LSN after concurrent work, and records both positions plus the required WAL files. Registrations
+compose by retaining from the oldest active start and are disposed on success, cancellation, and failure. The copy
+does not acquire the database-wide writer lock; consistency is established by the physical pages and retained WAL.
+
 ## 36. Transaction isolation and concurrency model
 
 The final concurrency design must specify observable SQL behavior, not only locks.

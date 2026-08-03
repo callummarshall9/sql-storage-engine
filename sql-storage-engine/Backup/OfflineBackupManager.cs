@@ -26,6 +26,12 @@ public sealed class OfflineBackupManager(TimeProvider? timeProvider = null)
 
     public async Task<BackupManifest> CreateAsync(string databasePath, IEnumerable<string> walPaths,
         string destinationDirectory, CancellationToken cancellationToken = default)
+        => await CreatePhysicalAsync(databasePath, walPaths, destinationDirectory, true, null, null,
+            cancellationToken).ConfigureAwait(false);
+
+    internal async Task<BackupManifest> CreatePhysicalAsync(string databasePath, IEnumerable<string> walPaths,
+        string destinationDirectory, bool requireCleanShutdown, LogSequenceNumber? startLsn,
+        LogSequenceNumber? endLsn, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
         ArgumentNullException.ThrowIfNull(walPaths);
@@ -36,7 +42,7 @@ public sealed class OfflineBackupManager(TimeProvider? timeProvider = null)
         DatabaseHeader header;
         await using (var database = await PageDatabase.OpenAsync(databasePath, cancellationToken).ConfigureAwait(false))
             header = database.Header;
-        if (!header.IsCleanShutdown)
+        if (requireCleanShutdown && !header.IsCleanShutdown)
             throw new StorageResourceException("Offline backup requires a cleanly closed database.", new InvalidOperationException());
 
         var sources = new List<(string Path, string Name, string Kind)>
@@ -62,8 +68,8 @@ public sealed class OfflineBackupManager(TimeProvider? timeProvider = null)
                 if (source.Kind == "wal") lsns.AddRange(await ReadLsnsAsync(target, cancellationToken).ConfigureAwait(false));
             }
             var manifest = new BackupManifest(header.DatabaseId, header.FormatVersion, header.PageSize,
-                lsns.Count == 0 ? default : lsns.MinBy(lsn => lsn.Value),
-                lsns.Count == 0 ? default : lsns.MaxBy(lsn => lsn.Value), _timeProvider.GetUtcNow(),
+                startLsn ?? (lsns.Count == 0 ? default : lsns.MinBy(lsn => lsn.Value)),
+                endLsn ?? (lsns.Count == 0 ? default : lsns.MaxBy(lsn => lsn.Value)), _timeProvider.GetUtcNow(),
                 typeof(OfflineBackupManager).Assembly.GetName().Version?.ToString() ?? "0.0.0", files.AsReadOnly());
             await File.WriteAllBytesAsync(Path.Combine(destination, ManifestFileName),
                 JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions), cancellationToken).ConfigureAwait(false);
