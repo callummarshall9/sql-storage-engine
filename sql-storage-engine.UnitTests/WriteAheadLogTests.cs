@@ -56,7 +56,7 @@ public sealed class WriteAheadLogTests
         WalFormat.ReadRecords(device.Bytes).Records.Select(record => record.Lsn).Should().Equal(first.Lsn, second.Lsn);
     }
 
-    internal sealed class MemoryWalDevice : IWalDevice
+    internal class MemoryWalDevice : IWalDevice
     {
         private readonly List<byte> _bytes = [];
         public int MaximumWrite { get; set; } = int.MaxValue;
@@ -80,7 +80,7 @@ public sealed class WriteAheadLogTests
             for (var index = 0; index < count; index++) _bytes[checked((int)offset) + index] = source.Span[index];
             return ValueTask.FromResult(count);
         }
-        public ValueTask FlushAsync(CancellationToken cancellationToken = default) =>
+        public virtual ValueTask FlushAsync(CancellationToken cancellationToken = default) =>
             FailFlush ? ValueTask.FromException(new IOException("Injected flush failure.")) : ValueTask.CompletedTask;
         public ValueTask RollSegmentAsync(ulong segmentNumber, CancellationToken cancellationToken = default)
         { RolledSegments.Add(segmentNumber); return ValueTask.CompletedTask; }
