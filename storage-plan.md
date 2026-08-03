@@ -1206,6 +1206,12 @@ Every backup includes a manifest with:
 
 Production acceptance requires automated restore tests. A backup that has not been restored and integrity-checked is not considered verified.
 
+Offline backups require the database header's clean-shutdown marker. Files are copied into a new directory under
+fixed engine-assigned names and described by a bounded JSON manifest containing database identity, format and page
+size, WAL LSN bounds, UTC creation time, engine version, byte sizes, and SHA-256 checksums. Verification rereads
+every file independently. Restore always targets a new directory, revalidates the manifest and checksums, then opens
+the copied database and validates every allocated page header and checksum before reporting success.
+
 ## 36. Transaction isolation and concurrency model
 
 The final concurrency design must specify observable SQL behavior, not only locks.
