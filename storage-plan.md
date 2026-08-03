@@ -849,6 +849,14 @@ and immediately locks the returned `RowId`. Table scans apply the same policy ro
 each row after decoding, while repeatable-read retains every visited row lock. Serializable scans additionally use
 the index-range rules described below; row locks alone do not prevent phantoms.
 
+Serializable index scans retain a shared range lock through transaction completion. Insert and delete operations
+take exclusive key intent, which conflicts with every retained range containing that key. Two finite ranges overlap
+at an equal endpoint only when both include it, matching `IndexRange`/`BTreeRange` scan semantics. Null lower or
+upper endpoints mean negative or positive infinity and their inclusion flags are ignored. Equal finite endpoints
+form an empty range when either endpoint is excluded; empty ranges conflict with no key or range. Overlapping
+resources participate in the same global FIFO ordering and wait-for graph, while non-overlapping ranges proceed
+independently.
+
 ## 25. Failure cases that must remain safe
 
 The design must account for failures:

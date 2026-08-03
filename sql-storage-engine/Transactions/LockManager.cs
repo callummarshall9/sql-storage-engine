@@ -14,6 +14,7 @@ public sealed class LockManager : ILockManager
     private readonly Dictionary<TransactionId, HashSet<LockResource>> _owned = [];
     private readonly Dictionary<TransactionId, Action> _victimHandlers = [];
     private long _deadlockCount;
+    private long _nextRequestSequence;
     private TransactionId? _lastDeadlockVictim;
 
     /// <summary>Gets the number of cycles resolved by this manager.</summary>
@@ -47,10 +48,10 @@ public sealed class LockManager : ILockManager
                 if (current == mode) return ValueTask.CompletedTask;
                 throw new InvalidOperationException($"Transaction {transactionId} already owns a {current} lock; use conversion.");
             }
-            var request = new LockRequest(transactionId, mode, false);
+            var request = new LockRequest(transactionId, mode, false, ++_nextRequestSequence);
             state.Waiting.Enqueue(request);
             RegisterCancellation(resource, request, cancellationToken);
-            ProcessQueue(resource, state);
+            ProcessQueues();
             ResolveDeadlocks();
             return new ValueTask(request.Completion.Task);
         }
@@ -70,10 +71,10 @@ public sealed class LockManager : ILockManager
             if (current == mode) return ValueTask.CompletedTask;
             if (state.Waiting.Any(request => request.TransactionId == transactionId))
                 throw new InvalidOperationException($"Transaction {transactionId} already has a waiting request for the resource.");
-            var request = new LockRequest(transactionId, mode, true);
+            var request = new LockRequest(transactionId, mode, true, ++_nextRequestSequence);
             state.Waiting.Enqueue(request);
             RegisterCancellation(resource, request, cancellationToken);
-            ProcessQueue(resource, state);
+            ProcessQueues();
             ResolveDeadlocks();
             return new ValueTask(request.Completion.Task);
         }
@@ -87,7 +88,7 @@ public sealed class LockManager : ILockManager
             if (!_resources.TryGetValue(resource, out var state) || !state.Granted.Remove(transactionId)) return false;
             RemoveOwnership(transactionId, resource);
             CancelWaitingRequests(state, transactionId);
-            ProcessQueue(resource, state);
+            ProcessQueues();
             RemoveResourceIfEmpty(resource, state);
             return true;
         }
@@ -101,7 +102,7 @@ public sealed class LockManager : ILockManager
             {
                 pair.Value.Granted.Remove(transactionId);
                 CancelWaitingRequests(pair.Value, transactionId);
-                ProcessQueue(pair.Key, pair.Value);
+                ProcessQueues();
                 RemoveResourceIfEmpty(pair.Key, pair.Value);
             }
             _owned.Remove(transactionId);
@@ -156,23 +157,25 @@ public sealed class LockManager : ILockManager
     private Dictionary<TransactionId, HashSet<TransactionId>> BuildWaitForGraph()
     {
         var graph = new Dictionary<TransactionId, HashSet<TransactionId>>();
-        foreach (var state in _resources.Values)
+        var waiters = _resources.SelectMany(pair => pair.Value.Waiting.Select(request => (Resource: pair.Key, Request: request)))
+            .OrderBy(item => item.Request.Sequence).ToArray();
+        foreach (var waiter in waiters)
         {
-            var earlierWaiters = new List<TransactionId>();
-            foreach (var request in state.Waiting)
+            var request = waiter.Request;
+            if (!graph.TryGetValue(request.TransactionId, out var dependencies))
             {
-                if (!graph.TryGetValue(request.TransactionId, out var dependencies))
-                {
-                    dependencies = [];
-                    graph.Add(request.TransactionId, dependencies);
-                }
-                foreach (var granted in state.Granted)
-                    if (granted.Key != request.TransactionId && !LockRules.AreCompatible(granted.Value, request.Mode))
-                        dependencies.Add(granted.Key);
-                foreach (var earlier in earlierWaiters)
-                    if (earlier != request.TransactionId) dependencies.Add(earlier);
-                earlierWaiters.Add(request.TransactionId);
+                dependencies = [];
+                graph.Add(request.TransactionId, dependencies);
             }
+            foreach (var pair in _resources)
+                if (LockResourceRelations.Conflict(waiter.Resource, pair.Key))
+                    foreach (var granted in pair.Value.Granted)
+                        if (granted.Key != request.TransactionId && !LockRules.AreCompatible(granted.Value, request.Mode))
+                        dependencies.Add(granted.Key);
+            foreach (var earlier in waiters.Where(item => item.Request.Sequence < request.Sequence &&
+                         LockResourceRelations.Conflict(waiter.Resource, item.Resource)))
+                if (earlier.Request.TransactionId != request.TransactionId)
+                    dependencies.Add(earlier.Request.TransactionId);
         }
         return graph;
     }
@@ -188,7 +191,7 @@ public sealed class LockManager : ILockManager
                     request.CancellationRegistration.Unregister();
                     request.Completion.TrySetException(new DeadlockException(victim));
                 }
-            ProcessQueue(pair.Key, pair.Value);
+            ProcessQueues();
             RemoveResourceIfEmpty(pair.Key, pair.Value);
         }
         _owned.Remove(victim);
@@ -203,25 +206,44 @@ public sealed class LockManager : ILockManager
         return state;
     }
 
-    private void ProcessQueue(LockResource resource, ResourceState state)
+    private void ProcessQueues()
     {
-        while (state.Waiting.TryPeek(out var request) && IsGrantable(state, request))
+        bool granted;
+        do
         {
-            state.Waiting.Dequeue();
-            request.CancellationRegistration.Unregister();
-            state.Granted[request.TransactionId] = request.Mode;
-            if (!_owned.TryGetValue(request.TransactionId, out var resources))
+            granted = false;
+            foreach (var pair in _resources.ToArray())
             {
-                resources = [];
-                _owned.Add(request.TransactionId, resources);
+                var resource = pair.Key;
+                var state = pair.Value;
+                if (!state.Waiting.TryPeek(out var request) || !IsGrantable(resource, request)) continue;
+                state.Waiting.Dequeue();
+                request.CancellationRegistration.Unregister();
+                state.Granted[request.TransactionId] = request.Mode;
+                if (!_owned.TryGetValue(request.TransactionId, out var resources))
+                {
+                    resources = [];
+                    _owned.Add(request.TransactionId, resources);
+                }
+                resources.Add(resource);
+                request.Completion.TrySetResult();
+                granted = true;
             }
-            resources.Add(resource);
-            request.Completion.TrySetResult();
-        }
+        } while (granted);
     }
 
-    private static bool IsGrantable(ResourceState state, LockRequest request) => state.Granted.All(pair =>
-        pair.Key == request.TransactionId || LockRules.AreCompatible(pair.Value, request.Mode));
+    private bool IsGrantable(LockResource resource, LockRequest request)
+    {
+        foreach (var pair in _resources)
+        {
+            if (!LockResourceRelations.Conflict(resource, pair.Key)) continue;
+            if (pair.Value.Granted.Any(granted => granted.Key != request.TransactionId &&
+                    !LockRules.AreCompatible(granted.Value, request.Mode))) return false;
+            if (pair.Value.Waiting.Any(waiter => waiter.Sequence < request.Sequence &&
+                    waiter.TransactionId != request.TransactionId)) return false;
+        }
+        return true;
+    }
 
     private void RegisterCancellation(LockResource resource, LockRequest request, CancellationToken token)
     {
@@ -235,7 +257,7 @@ public sealed class LockManager : ILockManager
         {
             if (!_resources.TryGetValue(resource, out var state) || !RemoveWaiter(state, request)) return;
             request.Completion.TrySetCanceled(token);
-            ProcessQueue(resource, state);
+            ProcessQueues();
             RemoveResourceIfEmpty(resource, state);
         }
     }
@@ -287,11 +309,12 @@ public sealed class LockManager : ILockManager
         public Queue<LockRequest> Waiting { get; } = [];
     }
 
-    private sealed class LockRequest(TransactionId transactionId, LockMode mode, bool isConversion)
+    private sealed class LockRequest(TransactionId transactionId, LockMode mode, bool isConversion, long sequence)
     {
         public TransactionId TransactionId { get; } = transactionId;
         public LockMode Mode { get; } = mode;
         public bool IsConversion { get; } = isConversion;
+        public long Sequence { get; } = sequence;
         public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationTokenRegistration CancellationRegistration { get; set; }
     }
