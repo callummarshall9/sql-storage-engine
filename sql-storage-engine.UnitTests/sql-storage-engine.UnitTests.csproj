@@ -26,4 +26,8 @@
       <ProjectReference Include="..\sql-storage-engine\sql-storage-engine.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <None Include="TestFixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
 </Project>

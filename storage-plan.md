@@ -1361,6 +1361,12 @@ Use stable numeric table, column, and index IDs internally. Names are catalog at
 
 A released format requires golden files checked into test fixtures. Every supported engine version must open the fixtures it claims to support.
 
+The compatibility suite contains one committed representative fixture for every supported database format. Each
+fixes database identity, page size/version, WAL timeline and records, and expected logical query contents. The runner
+materializes the physical header, opens it read-only, validates WAL and integrity, and compares expected contents.
+Future versions are rejected before destination creation or modification. Migration tests reuse these fixtures and
+checkpoint every idempotent version boundary so interrupted upgrades can resume.
+
 ## 40. Maintenance and space reclamation
 
 Normal use creates fragmentation and retired storage. Production maintenance includes:

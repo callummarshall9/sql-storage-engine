@@ -1,0 +1,12 @@
+{
+  "Name": "format-v1-representative",
+  "FormatVersion": 1,
+  "DatabaseId": "12345678-1234-5678-9abc-def012345678",
+  "PageSize": 8192,
+  "Timeline": 1,
+  "ExpectedRows": ["items:1:alpha", "items:2:beta"],
+  "WalRecords": [
+    { "Lsn": 1, "TransactionId": 1, "Type": "Begin" },
+    { "Lsn": 41, "TransactionId": 1, "Type": "Commit" }
+  ]
+}
