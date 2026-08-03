@@ -1261,6 +1261,12 @@ The lock manager needs:
 
 ## 37. Resource governance and failure containment
 
+`StorageLimits` publishes validated defaults and hard maxima for buffer frames, row/key/value bytes, overflow pages,
+transaction duration and undo bytes, pins, scan pages, and concurrent transactions. Values outside `1..maximum`
+are configuration errors. Runtime excess uses a stable `StorageResourceExhaustedException` message beginning with
+the limit code. File-controlled counts and lengths are checked before allocation. Transaction and pin capacity is
+represented by idempotent disposable leases so success, cancellation, and exception paths release capacity.
+
 All untrusted or workload-controlled sizes require limits:
 
 - Maximum database, table, row, key, and value size.
