@@ -817,6 +817,20 @@ The MVP can use:
 
 Do not hold a page latch while waiting for a transaction lock; this avoids a common source of deadlocks.
 
+Logical locks use three modes with this compatibility table. `S` is shared, `U` is update, and `X` is exclusive:
+
+| Held/requested | S | U | X |
+|---|---:|---:|---:|
+| S | Yes | Yes | No |
+| U | Yes | No | No |
+| X | No | No | No |
+
+Update locks allow readers to continue while ensuring only one prospective writer exists. Locks may be upgraded
+from `S` to `U` or `X`, and from `U` to `X`; equal-mode conversion is idempotent. Downgrades are intentionally
+rejected because transaction locks are retained at their strongest acquired mode until release. Lock resources use
+typed table, row, index, and range identifiers. Acquisition and conversion are cancellation-safe, and ownership is
+always attributed to the requesting `TransactionId` until explicit or transaction-wide release.
+
 ## 25. Failure cases that must remain safe
 
 The design must account for failures:
