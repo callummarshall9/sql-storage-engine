@@ -5,6 +5,20 @@
         <RootNamespace>sql_storage_engine</RootNamespace>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <PackageId>SqlStorageEngine</PackageId>
+        <Authors>Callum Marshall</Authors>
+        <Description>A page-oriented SQL storage engine with buffering, heaps, indexes, transactions, WAL, recovery, backup, and operational tooling.</Description>
+        <PackageTags>sql;storage-engine;database;wal;b-plus-tree</PackageTags>
+        <RepositoryUrl>https://github.com/callummarshall9/sql-storage-engine</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageReadmeFile>quickstart.md</PackageReadmeFile>
+        <IncludeSymbols>true</IncludeSymbols>
+        <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+        <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="..\quickstart.md" Pack="true" PackagePath="/" />
+    </ItemGroup>
 
 </Project>

@@ -1,0 +1,80 @@
+name: Publish NuGet package
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer package version, for example 1.2.3 or 1.2.3-preview.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: nuget-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve and validate package version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${DISPATCH_VERSION}"
+          fi
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Invalid SemVer package version: ${VERSION}" >&2
+            exit 1
+          fi
+
+          echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Restore
+        run: dotnet restore sql-storage-engine.sln
+
+      - name: Build and test with warnings as errors
+        run: dotnet test sql-storage-engine.sln --configuration Release --no-restore -warnaserror -m:1
+
+      - name: Pack
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.value }}
+        run: >-
+          dotnet pack sql-storage-engine/sql-storage-engine.csproj
+          --configuration Release
+          --no-restore
+          -warnaserror
+          -p:Version=${PACKAGE_VERSION}
+          -p:PackageVersion=${PACKAGE_VERSION}
+          --output artifacts
+
+      - name: Publish package and symbols to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          dotnet nuget push "artifacts/*.nupkg"
+          --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+          --api-key "${GITHUB_TOKEN}"
+          --skip-duplicate
