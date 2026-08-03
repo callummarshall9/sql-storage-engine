@@ -69,6 +69,8 @@ public sealed class TableStorageInsertTests
         public TableHeap Heap { get; }
         public TableIndex[] Indexes { get; }
         public TableStorage Table { get; }
+        internal InMemoryPageStore Pages => _pages;
+        internal BufferPool Pool => _pool;
 
         public static async Task<Fixture> CreateAsync(bool uniqueFirst = false, int inlineThreshold = 16)
         {

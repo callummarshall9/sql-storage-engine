@@ -27,6 +27,9 @@ public sealed record TableUpdateResult(bool Updated, RowId PreviousRowId, RowId 
     public bool Relocated => PreviousRowId != CurrentRowId;
 }
 
+/// <summary>Describes logical deletion and overflow roots that require deferred reclamation.</summary>
+public sealed record TableDeleteResult(bool Deleted, IReadOnlyList<PageId> DeferredCleanupPageIds);
+
 /// <summary>Reports a failed logical table mutation and storage roots requiring deferred cleanup.</summary>
 public sealed class TableMutationException : StorageException
 {
@@ -176,5 +179,44 @@ public sealed class TableStorage
             throw new TableMutationException("Table update failed and the previous logical state was restored.",
                 unreclaimed.Distinct().ToArray(), exception);
         }
+    }
+
+    /// <summary>Removes every index reference, invalidates the heap slot, and reclaims owned overflow chains.</summary>
+    public async ValueTask<TableDeleteResult> DeleteAsync(RowId rowId,
+        CancellationToken cancellationToken = default)
+    {
+        var current = await _heap.ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
+        if (current.Result != TableHeapLookupResult.Found)
+            return new TableDeleteResult(false, Array.Empty<PageId>());
+        var row = await _rowCodec.DecodeAsync(current.Row, _schema, cancellationToken).ConfigureAwait(false);
+        var overflowReferences = _rowCodec.GetOverflowReferences(current.Row.Span, _schema).Values.ToArray();
+        List<(TableIndex Index, IndexKey Key)> removed = [];
+        try
+        {
+            foreach (var index in _indexes)
+            {
+                var key = CatalogIndexKey.Encode(row, _table, index.Definition);
+                if (!await index.RemoveAsync(key, rowId, cancellationToken).ConfigureAwait(false))
+                    throw new StorageCorruptionException($"Index {index.Definition.Id} is missing the row being deleted.");
+                removed.Add((index, key));
+            }
+            if (!await _heap.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false))
+                throw new StorageCorruptionException("Heap row became inaccessible during coordinated deletion.");
+        }
+        catch (Exception exception)
+        {
+            List<PageId> unreclaimed = [];
+            foreach (var mutation in removed.AsEnumerable().Reverse())
+                try { await mutation.Index.AddAsync(mutation.Key, rowId, CancellationToken.None).ConfigureAwait(false); }
+                catch (StorageException) { unreclaimed.Add(mutation.Index.Definition.RootPageId); }
+            throw new TableMutationException("Table deletion failed before the heap row was removed; index compensation was attempted.",
+                unreclaimed.Distinct().ToArray(), exception);
+        }
+
+        List<PageId> deferred = [];
+        foreach (var reference in overflowReferences)
+            try { await _overflow.FreeAsync(reference, cancellationToken).ConfigureAwait(false); }
+            catch (Exception) { deferred.Add(reference.FirstPageId); }
+        return new TableDeleteResult(true, deferred.AsReadOnly());
     }
 }
