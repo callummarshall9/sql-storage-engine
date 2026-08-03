@@ -1363,6 +1363,12 @@ Expose structured metrics rather than requiring log parsing:
 - Heap live/dead bytes and fragmentation.
 - B+ tree height, page occupancy, splits, merges, and scan pages.
 - Overflow values, bytes, and orphan count.
+
+The engine meter uses counters for totals, observable gauges for current state, and millisecond histograms for
+latency. Its complete surface covers buffer hits/misses and pinned/dirty frames; page reads/writes/flush latency;
+WAL bytes/flush latency; commits, rollbacks, and deadlocks; heap live/dead bytes; B+ tree splits, merges, and height;
+overflow bytes; checkpoint duration; and recovery distance. Labels are restricted to fixed `outcome` values. Typed
+IDs, row values, and keys are never labels, preventing cardinality and data-disclosure growth.
 - Checkpoint duration and recovery distance.
 - Backup age, duration, size, and verification result.
 
