@@ -20,14 +20,15 @@ public sealed class FilePageStore : IPageStore
 
     public int PageSize { get; }
 
-    public static FilePageStore OpenExisting(string path, int pageSize)
+    public static FilePageStore OpenExisting(string path, int pageSize, bool readOnly = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!PageConstants.IsSupportedSize(pageSize)) throw new ArgumentOutOfRangeException(nameof(pageSize));
         try
         {
             return new FilePageStore(path, pageSize,
-                File.OpenHandle(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess));
+                File.OpenHandle(path, FileMode.Open, readOnly ? FileAccess.Read : FileAccess.ReadWrite,
+                    readOnly ? FileShare.ReadWrite : FileShare.Read, FileOptions.Asynchronous | FileOptions.RandomAccess));
         }
         catch (IOException exception)
         {

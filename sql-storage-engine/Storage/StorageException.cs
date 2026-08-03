@@ -48,6 +48,12 @@ public sealed class StorageResourceExhaustedException : StorageException
     public StorageResourceExhaustedException(string message) : base(message) { }
 }
 
+/// <summary>Indicates that read-only open cannot proceed until crash recovery runs.</summary>
+public sealed class RecoveryRequiredException : StorageException
+{
+    public RecoveryRequiredException() : base("Database requires recovery before it can be opened read-only.") { }
+}
+
 /// <summary>Indicates that an insertion would duplicate a logical key in a unique index.</summary>
 public sealed class DuplicateIndexKeyException : StorageException
 {

@@ -1227,6 +1227,11 @@ timeline, selects records at or below the exact durable target LSN, and excludes
 wrong-database archives have distinct storage errors before destination creation. A successful restore writes a new
 timeline descriptor whose parent and fork LSN prevent accidental continuation with the source timeline's WAL.
 
+Writer open durably clears the clean-shutdown bit before returning or accepting mutations. Clean disposal first
+flushes outstanding data, then writes and flushes the clean marker. A crash or abandoned writer therefore leaves
+recovery required. Read-only open uses a non-writing handle: it succeeds only for a clean header and otherwise
+throws `RecoveryRequiredException` without changing any byte.
+
 ## 36. Transaction isolation and concurrency model
 
 The final concurrency design must specify observable SQL behavior, not only locks.

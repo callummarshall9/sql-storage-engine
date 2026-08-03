@@ -40,7 +40,7 @@ public sealed class OfflineBackupManager(TimeProvider? timeProvider = null)
         if (Directory.Exists(destination) || File.Exists(destination))
             throw new IOException($"Backup destination already exists: '{destination}'.");
         DatabaseHeader header;
-        await using (var database = await PageDatabase.OpenAsync(databasePath, cancellationToken).ConfigureAwait(false))
+        await using (var database = await PageDatabase.OpenAsync(databasePath, DatabaseOpenMode.ReadOnly, cancellationToken).ConfigureAwait(false))
             header = database.Header;
         if (requireCleanShutdown && !header.IsCleanShutdown)
             throw new StorageResourceException("Offline backup requires a cleanly closed database.", new InvalidOperationException());
@@ -143,7 +143,7 @@ public sealed class OfflineBackupManager(TimeProvider? timeProvider = null)
 
     private static async Task VerifyDatabasePagesAsync(string path, BackupManifest manifest, CancellationToken token)
     {
-        await using var database = await PageDatabase.OpenAsync(path, token).ConfigureAwait(false);
+        await using var database = await PageDatabase.OpenAsync(path, DatabaseOpenMode.ReadOnly, token).ConfigureAwait(false);
         if (database.Header.DatabaseId != manifest.DatabaseId || database.Header.FormatVersion != manifest.FormatVersion ||
             database.PageSize != manifest.PageSize) throw new StorageCorruptionException("Restored database identity or format differs from its manifest.");
         var page = new byte[database.PageSize];

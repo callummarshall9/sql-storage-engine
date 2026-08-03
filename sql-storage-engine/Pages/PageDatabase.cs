@@ -13,11 +13,13 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
     private readonly SemaphoreSlim _allocationLock = new(1, 1);
     private DatabaseHeader _header;
     private bool _disposed;
+    private readonly DatabaseOpenMode _openMode;
 
-    private PageDatabase(FilePageStore store, DatabaseHeader header)
+    private PageDatabase(FilePageStore store, DatabaseHeader header, DatabaseOpenMode openMode)
     {
         _store = store;
         _header = header;
+        _openMode = openMode;
     }
 
     public int PageSize => _store.PageSize;
@@ -55,17 +57,29 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
     }
 
     public static async Task<PageDatabase> OpenAsync(string path, CancellationToken cancellationToken = default)
+        => await OpenAsync(path, DatabaseOpenMode.Writer, cancellationToken).ConfigureAwait(false);
+
+    public static async Task<PageDatabase> OpenAsync(string path, DatabaseOpenMode openMode,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
         var pageSize = await ProbePageSizeAsync(fullPath, cancellationToken).ConfigureAwait(false);
-        var store = FilePageStore.OpenExisting(fullPath, pageSize);
+        if (!Enum.IsDefined(openMode)) throw new ArgumentOutOfRangeException(nameof(openMode));
+        var store = FilePageStore.OpenExisting(fullPath, pageSize, openMode == DatabaseOpenMode.ReadOnly);
         try
         {
             var page = new byte[pageSize];
             await store.ReadAsync(new PageId(0), page, cancellationToken).ConfigureAwait(false);
-            var database = new PageDatabase(store, DatabaseHeaderCodec.Read(page));
+            var header = DatabaseHeaderCodec.Read(page);
+            if (openMode == DatabaseOpenMode.ReadOnly && !header.IsCleanShutdown) throw new RecoveryRequiredException();
+            var database = new PageDatabase(store, header, openMode);
             await database.ValidateFreeListAsync(cancellationToken).ConfigureAwait(false);
+            if (openMode == DatabaseOpenMode.Writer)
+            {
+                database._header = database._header with { IsCleanShutdown = false };
+                await database.PersistHeaderAsync(cancellationToken).ConfigureAwait(false);
+            }
             return database;
         }
         catch { await store.DisposeAsync().ConfigureAwait(false); throw; }
@@ -75,7 +89,9 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
         _store.ReadAsync(pageId, destination, cancellationToken);
 
     public ValueTask WriteAsync(PageId pageId, ReadOnlyMemory<byte> source, CancellationToken cancellationToken = default) =>
-        _store.WriteAsync(pageId, source, cancellationToken);
+        _openMode == DatabaseOpenMode.ReadOnly
+            ? ValueTask.FromException(new InvalidOperationException("Read-only databases cannot be modified."))
+            : _store.WriteAsync(pageId, source, cancellationToken);
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default) => _store.FlushAsync(cancellationToken);
 
@@ -134,8 +150,13 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
         try
         {
             if (_disposed) return;
-            _disposed = true;
             await _store.FlushAsync().ConfigureAwait(false);
+            if (_openMode == DatabaseOpenMode.Writer)
+            {
+                _header = _header with { IsCleanShutdown = true };
+                await PersistHeaderAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            _disposed = true;
             await _store.DisposeAsync().ConfigureAwait(false);
         }
         finally { _allocationLock.Release(); _allocationLock.Dispose(); }
@@ -221,3 +242,6 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 }
+
+/// <summary>Selects mutable writer ownership or non-modifying diagnostic access.</summary>
+public enum DatabaseOpenMode { Writer = 1, ReadOnly = 2 }
