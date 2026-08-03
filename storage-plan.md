@@ -831,6 +831,11 @@ rejected because transaction locks are retained at their strongest acquired mode
 typed table, row, index, and range identifiers. Acquisition and conversion are cancellation-safe, and ownership is
 always attributed to the requesting `TransactionId` until explicit or transaction-wide release.
 
+Each resource has a FIFO request queue. Once a request must wait, later compatible acquisitions do not bypass it.
+Conversions retain their already-granted mode and take their normal position in that queue. Commit, rollback,
+failure, and disposal release every lock attributed to the transaction; cancelling a waiter removes it before later
+requests are reconsidered.
+
 ## 25. Failure cases that must remain safe
 
 The design must account for failures:
