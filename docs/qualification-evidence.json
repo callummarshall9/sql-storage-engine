@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "combinations": [
+    {
+      "id": "linux-x64-ext4",
+      "os": "Linux kernel 6.0+",
+      "architecture": "x86-64",
+      "filesystem": "local ext4 data=ordered with barriers",
+      "runtime": ".NET 10",
+      "command": "dotnet test sql-storage-engine.sln --configuration Release --no-restore -warnaserror -m:1",
+      "requiredSuites": [
+        "PersistentFormatFuzzTests",
+        "CrashBoundaryHarnessTests",
+        "PartialWriteHarnessTests",
+        "OfflineBackupTests",
+        "OnlineBackupTests",
+        "PointInTimeRestoreTests",
+        "RecoveryRedoTests",
+        "RecoveryUndoTests",
+        "DeadlockTests",
+        "SerializableRangeLockTests",
+        "DatabaseIntegrityCheckerTests",
+        "FormatCompatibilityTests",
+        "FileFormatUpgradeTests"
+      ]
+    }
+  ]
+}

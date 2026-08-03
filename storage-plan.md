@@ -13,6 +13,9 @@ This document describes a small but credible SQL storage engine built around:
 
 The goal is to make each component independently understandable and testable while keeping the first implementation small enough to complete.
 
+The qualified production envelope and its executable evidence are published in
+[docs/production-support.md](docs/production-support.md) and [docs/qualification-evidence.json](docs/qualification-evidence.json).
+
 ### Production profile
 
 “Production grade” in this plan means a single-node embedded or server-local storage engine with:
