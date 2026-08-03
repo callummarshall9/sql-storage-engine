@@ -158,14 +158,39 @@ public sealed class TableHeap
     }
 
     public async ValueTask<bool> CompactPageAsync(PageId pageId, CancellationToken cancellationToken = default)
+        => (await CompactPageWithResultAsync(pageId, cancellationToken).ConfigureAwait(false)).Compacted;
+
+    public async ValueTask<(bool Compacted, int ReclaimedBytes)> CompactPageWithResultAsync(PageId pageId,
+        CancellationToken cancellationToken = default)
     {
-        if (!await FindPageAsync(pageId, cancellationToken).ConfigureAwait(false)) return false;
+        if (!await FindPageAsync(pageId, cancellationToken).ConfigureAwait(false)) return (false, 0);
         using var pin = await _bufferPool.GetPageAsync(pageId, cancellationToken).ConfigureAwait(false);
         var page = new HeapPage(pin.Memory, pageId);
+        var before = page.FreeBytes;
         page.Compact();
         _freeSpaceMap.Update(pageId, page.FreeBytes);
         pin.MarkDirty(new LogSequenceNumber(0));
-        return true;
+        return (true, page.FreeBytes - before);
+    }
+
+    /// <summary>Returns a bounded snapshot of the validated heap chain for incremental maintenance.</summary>
+    public async ValueTask<IReadOnlyList<PageId>> GetPageIdsAsync(int maximumPages,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumPages);
+        var pages = new List<PageId>();
+        var current = RootPageId;
+        var seen = new HashSet<PageId>();
+        while (seen.Add(current))
+        {
+            if (pages.Count == maximumPages) throw new StorageResourceExhaustedException("Heap maintenance scan-page limit exceeded.");
+            pages.Add(current);
+            using var pin = await _bufferPool.GetPageAsync(current, cancellationToken).ConfigureAwait(false);
+            var page = new HeapPage(pin.Memory, current);
+            if (page.NextPageId is not { } next) return pages.AsReadOnly();
+            current = next;
+        }
+        throw new StorageCorruptionException($"Cycle detected in table heap at {current}.");
     }
 
     /// <summary>Reconstructs volatile free-space hints from the validated persisted page chain.</summary>

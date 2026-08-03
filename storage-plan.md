@@ -1365,6 +1365,12 @@ Maintenance operations must be:
 - Rate limited so foreground work can continue.
 - Observable through progress and error reporting.
 
+Heap maintenance uses bounded page batches and an update-mode table lock, allowing foreground shared operations.
+Compaction preserves slot IDs and generations, refreshes free-space hints, and checkpoints the next page plus
+reclaimed-byte/failure totals after every page. Cancellation is observed only at safe page boundaries; restart reads
+that checkpoint. An injected async throttle yields/rate-limits I/O. Page retirement remains outside compaction and
+must pass transaction-visibility checks before an allocator may reuse storage.
+
 Avoid in-place whole-file rewrites for the first compaction implementation. Build a replacement file, validate it, flush it, and atomically switch only where the platform contract supports that sequence.
 
 ## 41. Observability and diagnostics
