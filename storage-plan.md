@@ -1322,6 +1322,11 @@ failures. Every failure is synchronously handed to a regression-fixture sink wit
 continues. Core entry points cover database/page headers, heap slots, rows, keys, catalog, overflow, index pages,
 WAL, and backup manifests.
 
+Crash qualification instruments WAL append/flush, page mutation/write, allocation, catalog-root publication, and
+backup boundaries. A discovery pass fixes their ordinal order; subsequent runs terminate at exactly one boundary,
+reopen through the recovery entry point, assert fully committed or fully absent state according to the durability
+point, and run heap/index/overflow integrity validation. This makes every interruption deterministic and repeatable.
+
 Encryption at rest can be deferred, but the format should reserve identifiers for checksum and encryption algorithms. If encryption is added, authentication must cover page identity and metadata as well as payload bytes.
 
 ## 39. Schema and format evolution
