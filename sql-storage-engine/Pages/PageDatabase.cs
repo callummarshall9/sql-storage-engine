@@ -25,6 +25,23 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
     public int PageSize => _store.PageSize;
     public DatabaseHeader Header => _header;
 
+    /// <summary>Atomically publishes the root of the logical catalog in page zero.</summary>
+    internal async ValueTask PublishCatalogRootAsync(PageId rootPageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (rootPageId.Value == 0) throw new ArgumentOutOfRangeException(nameof(rootPageId));
+        await _allocationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (_openMode == DatabaseOpenMode.ReadOnly)
+                throw new InvalidOperationException("Read-only databases cannot publish a catalog.");
+            _header = _header with { CatalogRootPageId = rootPageId };
+            await PersistHeaderAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally { _allocationLock.Release(); }
+    }
+
     public static async Task<PageDatabase> CreateAsync(string path, int pageSize = PageConstants.DefaultSize,
         CancellationToken cancellationToken = default)
     {

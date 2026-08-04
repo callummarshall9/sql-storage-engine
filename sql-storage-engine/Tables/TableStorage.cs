@@ -5,6 +5,7 @@ using sql_storage_engine.Indexes;
 using sql_storage_engine.Overflow;
 using sql_storage_engine.Rows;
 using sql_storage_engine.Storage;
+using System.Runtime.CompilerServices;
 
 namespace sql_storage_engine.Tables;
 
@@ -67,6 +68,15 @@ public sealed class TableStorage
     }
 
     public CatalogTable Definition => _table;
+
+    /// <summary>Streams a stable logical projection of every live heap row.</summary>
+    public async IAsyncEnumerable<StoredRow> ScanAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var entry in _heap.ScanAsync(cancellationToken).ConfigureAwait(false))
+            yield return new StoredRow(entry.RowId,
+                await _rowCodec.DecodeAsync(entry.Row, _schema, cancellationToken).ConfigureAwait(false));
+    }
 
     /// <summary>Validates and inserts one logical row into the heap and every published index.</summary>
     public async ValueTask<RowId> InsertAsync(Row row, CancellationToken cancellationToken = default)

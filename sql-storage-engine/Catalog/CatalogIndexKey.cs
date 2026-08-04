@@ -14,13 +14,35 @@ public static class CatalogIndexKey
         ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(index);
         if (index.TableId != table.Id) throw new ArgumentException("Index does not belong to the table.", nameof(index));
-        var output = new ArrayBufferWriter<byte>();
-        foreach (var indexed in index.Columns)
+        table.ValidateFor(index);
+        if (row.Values.Count != table.Columns.Count)
+            throw new ArgumentException("Row width does not match the table definition.", nameof(row));
+        return EncodeValues(index.Columns.Select(indexed =>
         {
-            var segment = new ArrayBufferWriter<byte>();
             var position = table.Columns.Select((column, offset) => (column, offset))
                 .Single(item => item.column.Id == indexed.ColumnId).offset;
-            var value = row.Values[position];
+            return row.Values[position];
+        }).ToArray(), table, index);
+    }
+
+    /// <summary>Encodes values in index-column order for exact lookup and bounded index scans.</summary>
+    public static IndexKey EncodeValues(IReadOnlyList<SqlValue> values, CatalogTable table, CatalogIndex index)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(index);
+        table.ValidateFor(index);
+        if (values.Count != index.Columns.Count)
+            throw new ArgumentException($"Expected {index.Columns.Count} index values, received {values.Count}.", nameof(values));
+        var output = new ArrayBufferWriter<byte>();
+        for (var indexOffset = 0; indexOffset < index.Columns.Count; indexOffset++)
+        {
+            var indexed = index.Columns[indexOffset];
+            var column = table.Columns.Single(candidate => candidate.Id == indexed.ColumnId);
+            var value = values[indexOffset] ?? throw new ArgumentException("Index values cannot contain null CLR references.", nameof(values));
+            if (!value.IsNull && value.Type != column.Type)
+                throw new ArgumentException($"Column '{column.Name}' expects {column.Type}, received {value.Type}.", nameof(values));
+            var segment = new ArrayBufferWriter<byte>();
             if (value.IsNull)
                 WriteByte(segment, indexed.NullSortOrder == NullSortOrder.First ? (byte)0 : (byte)255);
             else
@@ -36,7 +58,7 @@ public static class CatalogIndexKey
                         break;
                     case TextSqlValue text: WriteLengthBytes(segment, RowCodec.Utf8.GetBytes(text.Value)); break;
                     case BinarySqlValue binary: WriteLengthBytes(segment, binary.Value.Span); break;
-                    default: throw new ArgumentException("Unsupported indexed SQL value.", nameof(row));
+                    default: throw new ArgumentException("Unsupported indexed SQL value.", nameof(values));
                 }
             }
             var encodedSegment = segment.WrittenSpan.ToArray();
@@ -45,6 +67,11 @@ public static class CatalogIndexKey
             Write(output, encodedSegment);
         }
         return new IndexKey(output.WrittenSpan);
+    }
+
+    private static void ValidateFor(this CatalogTable table, CatalogIndex index)
+    {
+        if (index.TableId != table.Id) throw new ArgumentException("Index does not belong to the table.", nameof(index));
     }
 
     private static void WriteLengthBytes(IBufferWriter<byte> output, ReadOnlySpan<byte> bytes)

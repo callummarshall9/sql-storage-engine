@@ -172,7 +172,7 @@ public sealed class CatalogService
         ArgumentNullException.ThrowIfNull(index);
         if (!_definition.Indexes.Any(candidate => candidate.Id == index.Id))
             throw new ArgumentException("Index does not belong to this catalog.", nameof(index));
-        return new PersistentBPlusTree(_bufferPool, _allocator, new MutableIndexRootReference(index.RootPageId), index.IsUnique);
+        return new PersistentBPlusTree(_bufferPool, _allocator, new CatalogIndexRootReference(this, index), index.IsUnique);
     }
 
     internal static TableDefinition ToRowTable(CatalogTable table) => new(table.Columns.Select(column =>
@@ -185,5 +185,28 @@ public sealed class CatalogService
         public async ValueTask<PageId> AllocateAsync(PageType type, CancellationToken token = default)
         { var id = await inner.AllocateAsync(type, token).ConfigureAwait(false); _allocated.Add(id); return id; }
         public ValueTask FreeAsync(PageId id, CancellationToken token = default) => inner.FreeAsync(id, token);
+    }
+
+    /// <summary>Keeps a root created by a later B+ tree split reachable after reopen.</summary>
+    private sealed class CatalogIndexRootReference(CatalogService owner, CatalogIndex initial) : IIndexRootReference
+    {
+        private CatalogIndex _index = initial;
+        public PageId RootPageId => _index.RootPageId;
+
+        public async ValueTask UpdateRootAsync(PageId rootPageId, CancellationToken cancellationToken = default)
+        {
+            if (rootPageId.Value == 0) throw new ArgumentOutOfRangeException(nameof(rootPageId));
+            var updated = new CatalogIndex(_index.Id, _index.Name, _index.TableId, rootPageId,
+                _index.IsUnique, _index.Columns);
+            var candidate = new CatalogDefinition(owner._definition.Tables,
+                owner._definition.Indexes.Select(index => index.Id == updated.Id ? updated : index));
+            // The new tree root must be durable before metadata is allowed to point at it.
+            await owner._bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
+            var written = await owner._pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            await owner._bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
+            owner._definition = candidate;
+            owner.RootPageId = written.RootPageId;
+            _index = updated;
+        }
     }
 }

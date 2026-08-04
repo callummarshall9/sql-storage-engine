@@ -54,7 +54,47 @@ dotnet add package SqlStorageEngine \
 
 The consuming project must target `.NET 10` or a compatible later framework.
 
-## 3. Create, allocate, reopen, and inspect a database
+## 3. Build a SQL engine against the logical API
+
+SQL analyzers and executors should depend on `IStorageEngine`, `IStorageCatalog`, `IStorageTable`, and
+`IStorageIndex`. These contracts expose stable schemas, typed values, logical rows, generation-safe row IDs, and
+index access without leaking page layouts, buffer pins, codecs, or allocation machinery.
+
+```csharp
+using sql_storage_engine;
+using sql_storage_engine.Catalog;
+using sql_storage_engine.Rows;
+
+await using IStorageEngine storage = await StorageEngine.CreateAsync("example.db");
+
+CatalogTable table = await storage.CreateTableAsync("users",
+[
+    new CatalogColumn(new ColumnId(1), "id", SqlType.Integer, false),
+    new CatalogColumn(new ColumnId(2), "name", SqlType.Text, true)
+]);
+
+CatalogIndex index = await storage.CreateIndexAsync("users_by_id", table.Id, true,
+    [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.Last)]);
+
+// Semantic analysis: bind names and inspect ordered column/type/nullability metadata.
+if (!storage.Catalog.TryGetTable("users", out CatalogTable? bound))
+    throw new InvalidOperationException("Unknown table.");
+
+// Execution: use logical rows; the package owns heap, overflow, and index maintenance.
+IStorageTable users = await storage.OpenTableAsync(bound.Id);
+var rowId = await users.InsertAsync(new Row([SqlValue.Integer(42), SqlValue.Text("Ada")]));
+StoredRow? row = await users.GetAsync(rowId);
+
+IStorageIndex usersById = await storage.OpenIndexAsync(index.Id);
+IReadOnlyList<Identifiers.RowId> matches = await usersById.FindAsync([SqlValue.Integer(42)]);
+```
+
+Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
+index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are
+flushed before they return. Explicit multi-statement transactions are not yet part of this high-level contract;
+do not build against the lower-level transaction classes as a substitute.
+
+## 4. Use page primitives for diagnostics and storage development
 
 ```csharp
 using sql_storage_engine.Identifiers;
@@ -88,7 +128,7 @@ Console.WriteLine($"Next page: {reopened.Header.NextPageId}");
 Always dispose writer databases. An interrupted writer intentionally leaves the recovery-required marker set;
 read-only open then throws `RecoveryRequiredException` rather than modifying the database.
 
-## 4. Publish a package version
+## 5. Publish a package version
 
 No repository secret is required for publication. The workflow uses the automatically created `GITHUB_TOKEN` with
 repository-scoped `packages: write` permission.
