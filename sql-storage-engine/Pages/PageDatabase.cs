@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Microsoft.Win32.SafeHandles;
 using sql_storage_engine.Identifiers;
 using sql_storage_engine.Storage;
+using sql_storage_engine.Rows;
 
 namespace sql_storage_engine.Pages;
 
@@ -42,18 +43,59 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
         finally { _allocationLock.Release(); }
     }
 
+    /// <summary>Allocates one database-wide monotonically increasing SQL rowversion value.</summary>
+    internal async ValueTask<SqlValue> AllocateRowVersionAsync(CancellationToken cancellationToken = default)
+    {
+        await _allocationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (_openMode == DatabaseOpenMode.ReadOnly)
+                throw new InvalidOperationException("Read-only databases cannot allocate rowversion values.");
+            var value = _header.NextRowVersion;
+            _header = _header with { NextRowVersion = checked(value + 1) };
+            await PersistHeaderAsync(cancellationToken).ConfigureAwait(false);
+            Span<byte> bytes = stackalloc byte[8];
+            BinaryPrimitives.WriteUInt64BigEndian(bytes, value);
+            return SqlValue.Binary(bytes);
+        }
+        finally { _allocationLock.Release(); }
+    }
+
+    internal async ValueTask<SqlValue> AllocateGeneratedValueAsync(Catalog.CatalogGeneratedAlwaysKind kind,
+        CancellationToken cancellationToken = default)
+    {
+        if (kind == Catalog.CatalogGeneratedAlwaysKind.RowStart)
+            return SqlValue.DateTime(new DateTime(DateTime.UtcNow.Ticks, DateTimeKind.Unspecified));
+        if (kind == Catalog.CatalogGeneratedAlwaysKind.RowEnd)
+            return SqlValue.DateTime(DateTime.MaxValue);
+        if (kind == Catalog.CatalogGeneratedAlwaysKind.None) throw new ArgumentOutOfRangeException(nameof(kind));
+        await _allocationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); var value = _header.NextGeneratedSequence;
+            _header = _header with { NextGeneratedSequence = checked(value + 1) };
+            await PersistHeaderAsync(cancellationToken).ConfigureAwait(false);
+            return SqlValue.Integer(checked((long)value));
+        }
+        finally { _allocationLock.Release(); }
+    }
+
     public static async Task<PageDatabase> CreateAsync(string path, int pageSize = PageConstants.DefaultSize,
+        string defaultCollation = "SQL_Latin1_General_CP1_CI_AS",
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!PageConstants.IsSupportedSize(pageSize)) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        _ = SqlCollation.Parse(defaultCollation);
         var fullPath = Path.GetFullPath(path);
         if (File.Exists(fullPath)) throw new IOException($"Database already exists: '{fullPath}'.");
         var directory = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(directory);
         var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         var header = new DatabaseHeader(DatabaseId.New(), pageSize, DatabaseHeader.CurrentFormatVersion,
-            null, null, new TableId(1), new IndexId(1), new TransactionId(1), new PageId(1), true);
+            null, null, new TableId(1), new IndexId(1), new TransactionId(1), new PageId(1), true,
+            DefaultCollation: defaultCollation);
         try
         {
             await using (var temporaryStore = FilePageStore.CreateNew(temporaryPath, pageSize))

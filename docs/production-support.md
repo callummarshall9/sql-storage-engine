@@ -42,9 +42,10 @@ local ext4 contract.
 |---|---:|
 | Buffer frames | 1,000,000 |
 | Encoded row | 16 MiB |
-| Index key | 65,535 bytes |
-| Logical value | 64 MiB |
-| Overflow chain | 8,192 pages |
+| Generic physical index key | 65,535 bytes |
+| SQL nonclustered declared key | 1,700 bytes |
+| Logical value | 2,147,483,647 bytes |
+| Overflow chain | 530,505 pages |
 | Transaction duration | 86,400 seconds |
 | In-memory undo per transaction | 256 MiB |
 | Pins per transaction | 65,536 |

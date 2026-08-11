@@ -1,6 +1,6 @@
 {
-  "Name": "format-v1-representative",
-  "FormatVersion": 1,
+  "Name": "format-v4-representative",
+  "FormatVersion": 4,
   "DatabaseId": "12345678-1234-5678-9abc-def012345678",
   "PageSize": 8192,
   "Timeline": 1,

@@ -24,7 +24,7 @@ public sealed class FormatCompatibilityTests
     {
         using var fixture = new TempFile(); using var destination = new TempFile(create: true);
         var json = await File.ReadAllTextAsync(FixturePath());
-        await File.WriteAllTextAsync(fixture.Path, json.Replace("\"FormatVersion\": 1", "\"FormatVersion\": 99", StringComparison.Ordinal));
+        await File.WriteAllTextAsync(fixture.Path, json.Replace("\"FormatVersion\": 4", "\"FormatVersion\": 99", StringComparison.Ordinal));
         var before = await File.ReadAllBytesAsync(destination.Path);
         await ((Func<Task>)(async () => await FormatCompatibility.OpenAsync(fixture.Path, destination.Path)))
             .Should().ThrowAsync<UnsupportedDatabaseVersionException>();
@@ -41,7 +41,7 @@ public sealed class FormatCompatibilityTests
         (await File.ReadAllBytesAsync(output.Path)).Should().Equal(first);
     }
 
-    private static string FixturePath() => Path.Combine(TestContext.CurrentContext.TestDirectory, "TestFixtures", "format-v1.json");
+    private static string FixturePath() => Path.Combine(TestContext.CurrentContext.TestDirectory, "TestFixtures", "format-v4.json");
     private sealed class TempFile : IDisposable
     {
         public TempFile(bool create = false) { Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "sql-format-" + Guid.NewGuid().ToString("N")); if (create) File.WriteAllText(Path, "unchanged"); }

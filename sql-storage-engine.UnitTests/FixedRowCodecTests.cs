@@ -32,7 +32,7 @@ public sealed class FixedRowCodecTests
 
         Convert.ToHexString(encoded.AsSpan(32)).Should().Be("040100000000000000800000000000000000");
         encoded.Length.Should().Be(50);
-        BitConverter.ToUInt16(encoded, 0).Should().Be(1);
+        BitConverter.ToUInt16(encoded, 0).Should().Be(4);
         BitConverter.ToUInt16(encoded, 2).Should().Be(3);
         BitConverter.ToUInt16(encoded, 4).Should().Be(1);
     }
@@ -61,9 +61,9 @@ public sealed class FixedRowCodecTests
         ((Func<Row>)(() => RowCodec.Decode(encoded.AsSpan(0, encoded.Length - 1), schema))).Should().Throw<StorageFormatException>();
         var otherSchema = new TableDefinition(new[]
         {
-            new ColumnDefinition(new ColumnId(99), "active", SqlType.Boolean, false),
-            new ColumnDefinition(new ColumnId(2), "minimum", SqlType.Integer, false),
-            new ColumnDefinition(new ColumnId(3), "optional", SqlType.Integer, true)
+            new ColumnDefinition(new ColumnId(99), "active", SqlType.Bit, false),
+            new ColumnDefinition(new ColumnId(2), "minimum", SqlType.BigInt, false),
+            new ColumnDefinition(new ColumnId(3), "optional", SqlType.BigInt, true)
         });
         ((Func<Row>)(() => RowCodec.Decode(encoded, otherSchema))).Should().Throw<StorageFormatException>();
         encoded[20] = 0xff;
@@ -72,8 +72,8 @@ public sealed class FixedRowCodecTests
 
     private static TableDefinition Schema() => new(new[]
     {
-        new ColumnDefinition(new ColumnId(1), "active", SqlType.Boolean, false),
-        new ColumnDefinition(new ColumnId(2), "minimum", SqlType.Integer, false),
-        new ColumnDefinition(new ColumnId(3), "optional", SqlType.Integer, true)
+        new ColumnDefinition(new ColumnId(1), "active", SqlType.Bit, false),
+        new ColumnDefinition(new ColumnId(2), "minimum", SqlType.BigInt, false),
+        new ColumnDefinition(new ColumnId(3), "optional", SqlType.BigInt, true)
     });
 }

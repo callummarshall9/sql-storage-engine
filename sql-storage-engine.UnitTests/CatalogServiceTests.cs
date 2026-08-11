@@ -18,7 +18,7 @@ public sealed class CatalogServiceTests
         await using var pool = new BufferPool(pages, 4, leaveOpen: true);
         var catalog = CatalogService.CreateEmpty(pages, pages, pool);
         var created = await catalog.CreateTableAsync("items", 7,
-            [new CatalogColumn(new ColumnId(1), "value", SqlType.Text, true)]);
+            [new CatalogColumn(new ColumnId(1), "value", SqlType.NVarChar(4000), true)]);
         catalog.RootPageId.Should().NotBeNull();
         var root = catalog.RootPageId!.Value;
 
@@ -41,11 +41,11 @@ public sealed class CatalogServiceTests
         await using var pool = new BufferPool(pages, 4, leaveOpen: true);
         var catalog = CatalogService.CreateEmpty(pages, pages, pool);
         await catalog.CreateTableAsync("items", 1,
-            [new CatalogColumn(new ColumnId(1), "value", SqlType.Integer, false)]);
+            [new CatalogColumn(new ColumnId(1), "value", SqlType.Int, false)]);
         var root = catalog.RootPageId;
 
         await ((Func<Task>)(async () => await catalog.CreateTableAsync("items", 1,
-            [new CatalogColumn(new ColumnId(1), "other", SqlType.Integer, false)]))).Should()
+            [new CatalogColumn(new ColumnId(1), "other", SqlType.Int, false)]))).Should()
             .ThrowAsync<CatalogConflictException>();
 
         catalog.RootPageId.Should().Be(root);
@@ -61,8 +61,8 @@ public sealed class CatalogServiceTests
         var catalog = CatalogService.CreateEmpty(allocator, allocator, pool);
 
         await ((Func<Task>)(async () => await catalog.CreateTableAsync("bad", 1,
-            [new CatalogColumn(new ColumnId(1), "same", SqlType.Integer, false),
-             new CatalogColumn(new ColumnId(2), "same", SqlType.Integer, false)]))).Should()
+            [new CatalogColumn(new ColumnId(1), "same", SqlType.Int, false),
+             new CatalogColumn(new ColumnId(2), "same", SqlType.Int, false)]))).Should()
             .ThrowAsync<ArgumentException>();
 
         allocator.AllocationCount.Should().Be(0);
@@ -77,8 +77,8 @@ public sealed class CatalogServiceTests
         await using var pool = new BufferPool(pages, 12, leaveOpen: true);
         var catalog = CatalogService.CreateEmpty(pages, pages, pool);
         var table = await catalog.CreateTableAsync("items", 1,
-            [new CatalogColumn(new ColumnId(1), "key", SqlType.Integer, false),
-             new CatalogColumn(new ColumnId(2), "value", SqlType.Text, true)]);
+            [new CatalogColumn(new ColumnId(1), "key", SqlType.Int, false),
+             new CatalogColumn(new ColumnId(2), "value", SqlType.NVarChar(4000), true)]);
         var heap = await catalog.OpenHeapAsync(table);
         var schema = new TableDefinition(table.Columns.Select(column =>
             new ColumnDefinition(column.Id, column.Name, column.Type, column.IsNullable)));
@@ -106,9 +106,9 @@ public sealed class CatalogServiceTests
         await using var pool = new BufferPool(pages, 8, leaveOpen: true);
         var catalog = CatalogService.CreateEmpty(pages, pages, pool);
         var table = await catalog.CreateTableAsync("items", 1,
-            [new CatalogColumn(new ColumnId(1), "key", SqlType.Integer, false)]);
+            [new CatalogColumn(new ColumnId(1), "key", SqlType.Int, false)]);
         var heap = await catalog.OpenHeapAsync(table);
-        var schema = new TableDefinition([new ColumnDefinition(new ColumnId(1), "key", SqlType.Integer, false)]);
+        var schema = new TableDefinition([new ColumnDefinition(new ColumnId(1), "key", SqlType.Int, false)]);
         await heap.InsertAsync(RowCodec.Encode(new Row([SqlValue.Integer(7)]), schema));
         await heap.InsertAsync(RowCodec.Encode(new Row([SqlValue.Integer(7)]), schema));
 

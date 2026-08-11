@@ -63,14 +63,16 @@ index access without leaking page layouts, buffer pins, codecs, or allocation ma
 ```csharp
 using sql_storage_engine;
 using sql_storage_engine.Catalog;
+using sql_storage_engine.Identifiers;
 using sql_storage_engine.Rows;
 
 await using IStorageEngine storage = await StorageEngine.CreateAsync("example.db");
 
 CatalogTable table = await storage.CreateTableAsync("users",
 [
-    new CatalogColumn(new ColumnId(1), "id", SqlType.Integer, false),
-    new CatalogColumn(new ColumnId(2), "name", SqlType.Text, true)
+    new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false),
+    new CatalogColumn(new ColumnId(2), "name",
+        SqlType.NVarChar(200, "Latin1_General_100_CI_AI"), true)
 ]);
 
 CatalogIndex index = await storage.CreateIndexAsync("users_by_id", table.Id, true,
@@ -89,10 +91,40 @@ IStorageIndex usersById = await storage.OpenIndexAsync(index.Id);
 IReadOnlyList<Identifiers.RowId> matches = await usersById.FindAsync([SqlValue.Integer(42)]);
 ```
 
+Database-scoped SQL Server types are created before tables that reference them:
+
+```csharp
+SqlType accountNumber = SqlType.Alias(
+    "sales", "AccountNumber", SqlType.VarChar(12), isNullable: false);
+await storage.CreateScalarTypeAsync(accountNumber);
+
+await storage.CreateTableTypeAsync("sales", "AccountBatch",
+[
+    new CatalogColumn(new ColumnId(1), "account", accountNumber, false),
+    new CatalogColumn(new ColumnId(2), "amount", SqlType.Decimal(38, 4), false)
+],
+[
+    new CatalogTableTypeIndex("PK_AccountBatch", isPrimaryKey: true, isUnique: true,
+        [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First)])
+]);
+```
+
+Typed XML collections are registered with `CreateXmlSchemaCollectionAsync` before columns reference
+`SqlType.TypedXml`; they can later be extended or dropped when dependency-free. CLR assemblies are cataloged with
+`CreateAssemblyAsync`, and trusted executable behavior is bound through `ISqlClrTypeRuntime`. JSON-path, namespace-bound
+XML, spatial, and vector indexes use `CreateSpecializedIndexAsync`; opened indexes expose JSON value/existence and XML
+path/value seeks in addition to whole-value lookup. The full coverage and normalization matrix is in
+[SQL Server 2025 data-type coverage](docs/sql-server-data-types.md).
+
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are
 flushed before they return. Explicit multi-statement transactions are not yet part of this high-level contract;
 do not build against the lower-level transaction classes as a substitute.
+
+Use `TryInsertAsync` when an index declares `IGNORE_DUP_KEY`; its `TableInsertResult` represents either the new `RowId`
+or a skipped row and warning. Existing `InsertAsync` remains a strict wrapper. Query executors can request dynamic-data-
+masking projection with `StorageReadOptions.Unprivileged`, or pass table/column `UNMASK` grants through the corresponding
+read options. The original read overloads represent a privileged/raw storage read.
 
 ## 4. Use page primitives for diagnostics and storage development
 

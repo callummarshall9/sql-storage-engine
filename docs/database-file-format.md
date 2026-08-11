@@ -1,4 +1,4 @@
-# Database file format version 1
+# Database file format version 4
 
 All integers are little-endian. Every page is the page size recorded below. The common header checksum is IEEE CRC-32 over the entire page with bytes 28–31 treated as zero. UUID bytes use RFC 4122/network field order.
 
@@ -13,7 +13,7 @@ All integers are little-endian. Every page is the page size recorded below. The 
 | 28 | 4 | Checksum | CRC-32 as described above |
 | 32 | 8 | Magic | ASCII `SQLSTORE` |
 | 40 | 16 | Database UUID | Canonical RFC 4122 bytes |
-| 56 | 2 | Database format | `1` |
+| 56 | 2 | Database format | `4` |
 | 58 | 1 | Clean shutdown | `0` or `1` |
 | 59 | 1 | Reserved | Zero |
 | 60 | 4 | Page size | Power of two, 4096–65536 |
@@ -23,6 +23,10 @@ All integers are little-endian. Every page is the page size recorded below. The 
 | 90 | 8 | Next index ID | Unsigned counter |
 | 98 | 8 | Next transaction ID | Unsigned counter |
 | 106 | 8 | Next page ID | At least 1 |
-| 114 | remainder | Reserved | Written as zero |
+| 114 | 8 | Next rowversion | Nonzero database-wide counter |
+| 122 | 2 | Default-collation byte length | `1..128` |
+| 124 | 128 | Default collation | Strict UTF-8 followed by zero padding |
+| 252 | 8 | Next generated sequence | Nonzero database-wide counter |
+| 260 | remainder | Reserved | Written as zero |
 
 Database creation writes and flushes a uniquely named sibling temporary file, publishes it with a no-overwrite rename, then opens the published file. POSIX directory durability requires a filesystem/platform offering directory `fsync`; callers must qualify that guarantee for their deployment.

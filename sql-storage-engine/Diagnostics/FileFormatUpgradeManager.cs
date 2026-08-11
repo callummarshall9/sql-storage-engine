@@ -47,12 +47,13 @@ public sealed class FileFormatUpgradeManager(OfflineBackupManager backupManager)
         CurrentProgress = progress; _activity.Add($"resume:{progress.NextStep}");
         if (progress.NextStep == 0 && progress.SourceVersion == 0)
         {
-            BinaryPrimitives.WriteUInt16LittleEndian(page.AsSpan(DatabaseHeaderCodec.PayloadOffset + 24), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(page.AsSpan(DatabaseHeaderCodec.PayloadOffset + 24),
+                DatabaseHeader.CurrentFormatVersion);
             PageChecksum.WriteChecksum(page.AsSpan(0, pageSize), pageSize);
             await File.WriteAllBytesAsync(databasePath, page, cancellationToken).ConfigureAwait(false);
             progress = progress with { NextStep = 1 }; CurrentProgress = progress;
             await PersistAsync(progressPath, progress, cancellationToken).ConfigureAwait(false);
-            _activity.Add("step:0-to-1");
+            _activity.Add($"step:0-to-{DatabaseHeader.CurrentFormatVersion}");
             if (afterBoundary is not null) await afterBoundary(1, cancellationToken).ConfigureAwait(false);
         }
         progress = progress with { Status = UpgradeStatus.Validating }; CurrentProgress = progress;
@@ -67,7 +68,7 @@ public sealed class FileFormatUpgradeManager(OfflineBackupManager backupManager)
         }
         progress = progress with { Status = UpgradeStatus.Complete }; CurrentProgress = progress;
         await PersistAsync(progressPath, progress, cancellationToken).ConfigureAwait(false);
-        _activity.Add("complete:1");
+        _activity.Add($"complete:{DatabaseHeader.CurrentFormatVersion}");
     }
 
     private static async Task PersistAsync(string path, UpgradeProgress progress, CancellationToken token)

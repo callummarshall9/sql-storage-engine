@@ -15,7 +15,7 @@ public sealed class CatalogPageChainTests
         await using var pages = new InMemoryPageStore(PageConstants.MinimumSize);
         var chain = new CatalogPageChain(pages, pages);
         var columns = Enumerable.Range(1, 180)
-            .Select(value => new CatalogColumn(new ColumnId((ulong)value), $"column_{value:D3}", SqlType.Text, true));
+            .Select(value => new CatalogColumn(new ColumnId((ulong)value), $"column_{value:D3}", SqlType.NVarChar(4000), true));
         var catalog = new CatalogDefinition(
             [new CatalogTable(new TableId(1), "large", 1, new PageId(500), columns)], []);
         var written = await chain.WriteAsync(catalog);
@@ -30,7 +30,7 @@ public sealed class CatalogPageChainTests
         await using var pages = new InMemoryPageStore();
         var chain = new CatalogPageChain(pages, pages);
         var catalog = new CatalogDefinition([new CatalogTable(new TableId(1), "t", 1, new PageId(2),
-            [new CatalogColumn(new ColumnId(1), "c", SqlType.Integer, false)])], []);
+            [new CatalogColumn(new ColumnId(1), "c", SqlType.BigInt, false)])], []);
         var written = await chain.WriteAsync(catalog);
         var page = new byte[pages.PageSize];
         await pages.ReadAsync(written.RootPageId, page);

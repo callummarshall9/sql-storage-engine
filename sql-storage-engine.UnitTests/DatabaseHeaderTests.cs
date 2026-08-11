@@ -30,7 +30,7 @@ public sealed class DatabaseHeaderTests
         ((Action)(() => DatabaseHeaderCodec.Read(page))).Should().Throw<StorageCorruptionException>();
         DatabaseHeaderCodec.Write(page, Header()); page[60] = 1;
         ((Action)(() => DatabaseHeaderCodec.Read(page))).Should().Throw<InvalidPageSizeException>();
-        DatabaseHeaderCodec.Write(page, Header()); page[56] = 2;
+        DatabaseHeaderCodec.Write(page, Header()); page[56] = 99;
         ((Action)(() => DatabaseHeaderCodec.Read(page))).Should().Throw<UnsupportedDatabaseVersionException>();
     }
 

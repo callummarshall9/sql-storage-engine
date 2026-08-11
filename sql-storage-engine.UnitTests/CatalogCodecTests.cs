@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using AwesomeAssertions;
 using sql_storage_engine.Catalog;
 using sql_storage_engine.Identifiers;
@@ -11,7 +12,7 @@ public sealed class CatalogCodecTests
 {
     private static CatalogDefinition Sample() => new(
         [new CatalogTable(new TableId(1), "t", 2, new PageId(3),
-            [new CatalogColumn(new ColumnId(4), "c", SqlType.Text, true)])],
+            [new CatalogColumn(new ColumnId(4), "c", SqlType.VarChar(100, "Latin1_General_100_BIN2"), true)])],
         [new CatalogIndex(new IndexId(5), "i", new TableId(1), new PageId(6), true,
             [new CatalogIndexedColumn(new ColumnId(4), SortDirection.Descending, NullSortOrder.First, "o")])]);
 
@@ -26,15 +27,15 @@ public sealed class CatalogCodecTests
     [Test]
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
-        Convert.ToHexString(CatalogCodec.Encode(Sample())).Should().Be(
-            "4341543101000000010000000100000001000000000000000100740200000000000000030000000000000001000000040000000000000001006303010000050000000000000001006901000000000000000600000000000000010001000400000000000000020101006F");
+        Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
+            .Should().Be("gOz2+uZYX479Mc6+adxqge+zikwnG3/wbPBtQDRZWno=");
     }
 
     [Test]
     public void UnknownVersionAndEveryTruncation_AreRejected()
     {
         var encoded = CatalogCodec.Encode(Sample());
-        BinaryPrimitives.WriteUInt16LittleEndian(encoded.AsSpan(4), 2);
+        BinaryPrimitives.WriteUInt16LittleEndian(encoded.AsSpan(4), 99);
         ((Func<CatalogDefinition>)(() => CatalogCodec.Decode(encoded))).Should().Throw<StorageFormatException>();
         encoded = CatalogCodec.Encode(Sample());
         for (var length = 0; length < encoded.Length; length++)
@@ -46,8 +47,8 @@ public sealed class CatalogCodecTests
     public void InvalidPersistedCrossReference_IsReportedAsCorruption()
     {
         var encoded = CatalogCodec.Encode(Sample());
-        // The index table ID follows its fixed ID and one-byte name in this golden fixture.
-        BinaryPrimitives.WriteUInt64LittleEndian(encoded.AsSpan(73), 99);
+        // The sample has no records after its 58-byte index record. Its table ID starts 13 bytes into that record.
+        BinaryPrimitives.WriteUInt64LittleEndian(encoded.AsSpan(encoded.Length - 45), 99);
         ((Func<CatalogDefinition>)(() => CatalogCodec.Decode(encoded))).Should().Throw<StorageCorruptionException>();
     }
 }

@@ -7,6 +7,7 @@ namespace sql_storage_engine;
 
 /// <summary>A row and its opaque, generation-safe physical identity.</summary>
 public sealed record StoredRow(RowId RowId, Row Row);
+public sealed record SpecializedIndexMatch(RowId RowId, double Distance);
 
 /// <summary>Options controlling the storage engine's bounded in-memory resources.</summary>
 public sealed record StorageEngineOptions
@@ -14,6 +15,25 @@ public sealed record StorageEngineOptions
     public int PageSize { get; init; } = Pages.PageConstants.DefaultSize;
     public int BufferPoolCapacity { get; init; } = 256;
     public int InlineValueThreshold { get; init; } = 1024;
+    public string DefaultCollation { get; init; } = "SQL_Latin1_General_CP1_CI_AS";
+}
+
+/// <summary>Permission context used when projecting dynamically masked query results.</summary>
+public sealed record StorageReadOptions
+{
+    private readonly HashSet<ColumnId> _unmaskedColumns;
+
+    public StorageReadOptions(bool canUnmaskAll = false, IEnumerable<ColumnId>? unmaskedColumns = null)
+    {
+        CanUnmaskAll = canUnmaskAll;
+        _unmaskedColumns = unmaskedColumns?.ToHashSet() ?? [];
+    }
+
+    public bool CanUnmaskAll { get; }
+    public IReadOnlySet<ColumnId> UnmaskedColumns => _unmaskedColumns;
+    public bool CanUnmask(ColumnId columnId) => CanUnmaskAll || _unmaskedColumns.Contains(columnId);
+    public static StorageReadOptions Unprivileged { get; } = new();
+    public static StorageReadOptions Privileged { get; } = new(canUnmaskAll: true);
 }
 
 /// <summary>Read-only catalog operations intended for name binding and semantic analysis.</summary>
@@ -21,10 +41,19 @@ public interface IStorageCatalog
 {
     IReadOnlyList<CatalogTable> Tables { get; }
     IReadOnlyList<CatalogIndex> Indexes { get; }
+    IReadOnlyList<CatalogScalarType> ScalarTypes { get; }
+    IReadOnlyList<CatalogTableType> TableTypes { get; }
+    IReadOnlyList<SqlXmlSchemaCollection> XmlSchemaCollections { get; }
+    IReadOnlyList<CatalogAssembly> Assemblies { get; }
+    string DefaultCollation { get; }
     bool TryGetTable(string name, out CatalogTable? table);
     bool TryGetTable(TableId id, out CatalogTable? table);
     bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index);
     IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId);
+    bool TryGetScalarType(string schemaName, string name, out CatalogScalarType? type);
+    bool TryGetTableType(string schemaName, string name, out CatalogTableType? type);
+    bool TryGetXmlSchemaCollection(string schemaName, string name, out SqlXmlSchemaCollection? collection);
+    bool TryGetAssembly(string name, out CatalogAssembly? assembly);
 }
 
 /// <summary>Logical table access for a SQL executor; physical pages and encodings remain hidden.</summary>
@@ -32,8 +61,13 @@ public interface IStorageTable
 {
     CatalogTable Definition { get; }
     ValueTask<RowId> InsertAsync(Row row, CancellationToken cancellationToken = default);
+    ValueTask<TableInsertResult> TryInsertAsync(Row row, CancellationToken cancellationToken = default);
     ValueTask<StoredRow?> GetAsync(RowId rowId, CancellationToken cancellationToken = default);
+    ValueTask<StoredRow?> GetAsync(RowId rowId, StorageReadOptions readOptions,
+        CancellationToken cancellationToken = default);
     IAsyncEnumerable<StoredRow> ScanAsync(CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StoredRow> ScanAsync(StorageReadOptions readOptions,
+        CancellationToken cancellationToken = default);
     ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
         CancellationToken cancellationToken = default);
     ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default);
@@ -48,6 +82,14 @@ public interface IStorageIndex
     IAsyncEnumerable<RowId> ScanAsync(IReadOnlyList<SqlValue> lowerBound,
         IReadOnlyList<SqlValue> upperBound, bool includeLowerBound = true, bool includeUpperBound = true,
         ScanDirection direction = ScanDirection.Ascending, CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<SpecializedIndexMatch>> SearchNearestAsync(SqlValue query, int count,
+        CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<RowId>> FindJsonPathAsync(string path, SqlValue value,
+        CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<RowId>> FindJsonPathExistsAsync(string path,
+        CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<RowId>> FindXmlPathAsync(string path, string? value = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>The supported high-level boundary between a SQL engine and this storage package.</summary>
@@ -56,8 +98,31 @@ public interface IStorageEngine : IAsyncDisposable
     IStorageCatalog Catalog { get; }
     ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         CancellationToken cancellationToken = default);
+    ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
+        IEnumerable<CatalogCheckConstraint> checkConstraints, CancellationToken cancellationToken = default);
     ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,
         IEnumerable<CatalogIndexedColumn> columns, CancellationToken cancellationToken = default);
+    ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,
+        IEnumerable<CatalogIndexedColumn> columns, CatalogBTreeIndexOptions options,
+        CancellationToken cancellationToken = default);
+    ValueTask<CatalogIndex> CreateSpecializedIndexAsync(string name, TableId tableId, CatalogIndexedColumn column,
+        CatalogSpecializedIndexOptions options, CancellationToken cancellationToken = default);
+    ValueTask<CatalogScalarType> CreateScalarTypeAsync(SqlType definition,
+        CancellationToken cancellationToken = default);
+    ValueTask<CatalogTableType> CreateTableTypeAsync(string schemaName, string name,
+        IEnumerable<CatalogColumn> columns, IEnumerable<CatalogTableTypeIndex>? indexes = null,
+        CancellationToken cancellationToken = default);
+    ValueTask<CatalogTableType> CreateTableTypeAsync(string schemaName, string name,
+        IEnumerable<CatalogColumn> columns, IEnumerable<CatalogTableTypeIndex>? indexes,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints, bool isMemoryOptimized,
+        CancellationToken cancellationToken = default);
+    ValueTask<SqlXmlSchemaCollection> CreateXmlSchemaCollectionAsync(SqlXmlSchemaCollection collection,
+        CancellationToken cancellationToken = default);
+    ValueTask<SqlXmlSchemaCollection> AlterXmlSchemaCollectionAsync(string schemaName, string name,
+        IEnumerable<string> additionalDefinitions, CancellationToken cancellationToken = default);
+    ValueTask DropXmlSchemaCollectionAsync(string schemaName, string name, CancellationToken cancellationToken = default);
+    ValueTask<CatalogAssembly> CreateAssemblyAsync(CatalogAssembly assembly, CancellationToken cancellationToken = default);
+    ValueTask DropAssemblyAsync(string name, CancellationToken cancellationToken = default);
     ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
     ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId, CancellationToken cancellationToken = default);
     ValueTask FlushAsync(CancellationToken cancellationToken = default);

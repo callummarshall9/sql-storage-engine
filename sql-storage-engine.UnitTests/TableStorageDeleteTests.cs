@@ -77,14 +77,14 @@ public sealed class TableStorageDeleteTests
         await using var pool = new BufferPool(faulting, 8, leaveOpen: true);
         var heap = await TableHeap.CreateAsync(pool, faulting);
         var definition = new CatalogTable(new TableId(1), "items", 1, heap.RootPageId,
-            [new CatalogColumn(new ColumnId(1), "value", SqlType.Text, false)]);
+            [new CatalogColumn(new ColumnId(1), "value", SqlType.NVarChar(4000), false)]);
         var overflow = new OverflowManager(pool, faulting);
         var codec = new OverflowRowCodec(overflow, 8);
         var table = new TableStorage(definition, heap, codec, overflow, []);
         var id = await table.InsertAsync(new Row([SqlValue.Text(new string('x', 100))]));
         var encoded = await heap.ReadAsync(id);
         var reference = codec.GetOverflowReferences(encoded.Row.Span,
-            new TableDefinition([new ColumnDefinition(new ColumnId(1), "value", SqlType.Text, false)])).Values.Single();
+            new TableDefinition([new ColumnDefinition(new ColumnId(1), "value", SqlType.NVarChar(4000), false)])).Values.Single();
         faulting.FailOn = FaultInjectingPageStore.Operation.Free;
 
         var result = await table.DeleteAsync(id);

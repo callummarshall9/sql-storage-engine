@@ -71,9 +71,9 @@ public sealed class RowUpdateTests
 
     private static TableDefinition Schema() => new(new[]
     {
-        new ColumnDefinition(new ColumnId(1), "id", SqlType.Integer, false),
-        new ColumnDefinition(new ColumnId(2), "name", SqlType.Text, true),
-        new ColumnDefinition(new ColumnId(3), "enabled", SqlType.Boolean, false),
-        new ColumnDefinition(new ColumnId(4), "bytes", SqlType.Binary, false)
+        new ColumnDefinition(new ColumnId(1), "id", SqlType.Int, false),
+        new ColumnDefinition(new ColumnId(2), "name", SqlType.NVarChar(4000), true),
+        new ColumnDefinition(new ColumnId(3), "enabled", SqlType.Bit, false),
+        new ColumnDefinition(new ColumnId(4), "bytes", SqlType.VarBinaryMax, false)
     });
 }

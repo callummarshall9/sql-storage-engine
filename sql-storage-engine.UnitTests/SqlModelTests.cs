@@ -21,7 +21,7 @@ public sealed class SqlModelTests
     [Test]
     public void Schema_RejectsNullForNonNullableAndMismatchedTypes()
     {
-        var column = new ColumnDefinition(new ColumnId(1), "enabled", SqlType.Boolean, false);
+        var column = new ColumnDefinition(new ColumnId(1), "enabled", SqlType.Bit, false);
         ((Action)(() => column.Validate(SqlValue.Null))).Should().Throw<ArgumentException>();
         ((Action)(() => column.Validate(SqlValue.Integer(1)))).Should().Throw<ArgumentException>();
         ((Action)(() => column.Validate(SqlValue.Boolean(true)))).Should().NotThrow();
@@ -31,7 +31,9 @@ public sealed class SqlModelTests
     public void RuntimeConversion_AcceptsSupportedRepresentationsAndRejectsUnknownOnes()
     {
         SqlValue.From(12.5).Should().Be(SqlValue.Float(12.5));
-        ((Func<SqlValue>)(() => SqlValue.From(42))).Should().Throw<ArgumentException>();
+        SqlValue.From(42).Should().Be(SqlValue.Integer(42));
+        SqlValue.From((byte)42).Should().Be(SqlValue.Integer(42));
+        ((Func<SqlValue>)(() => SqlValue.From(ulong.MaxValue))).Should().Throw<ArgumentException>();
         SqlValue.From(42L).Should().Be(SqlValue.Integer(42));
     }
 

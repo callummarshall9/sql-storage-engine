@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Text;
 using sql_storage_engine.Identifiers;
+using sql_storage_engine.Rows;
 using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Pages;
@@ -15,17 +17,22 @@ public sealed record DatabaseHeader(
     IndexId NextIndexId,
     TransactionId NextTransactionId,
     PageId NextPageId,
-    bool IsCleanShutdown)
+    bool IsCleanShutdown,
+    ulong NextRowVersion = 1,
+    string DefaultCollation = "SQL_Latin1_General_CP1_CI_AS",
+    ulong NextGeneratedSequence = 1)
 {
-    public const ushort CurrentFormatVersion = 1;
+    public const ushort CurrentFormatVersion = 4;
 }
 
 /// <summary>Encodes and validates the fixed page-zero database header.</summary>
 public static class DatabaseHeaderCodec
 {
     public const int PayloadOffset = PageHeaderCodec.EncodedLength;
-    public const int EncodedMetadataLength = 82;
+    public const int MaximumCollationNameBytes = 128;
+    public const int EncodedMetadataLength = 228;
     private static ReadOnlySpan<byte> Magic => "SQLSTORE"u8;
+    private static readonly UTF8Encoding Utf8 = new(false, true);
 
     public static void Write(Span<byte> page, DatabaseHeader header)
     {
@@ -46,6 +53,11 @@ public static class DatabaseHeaderCodec
         BinaryPrimitives.WriteUInt64LittleEndian(data[58..], header.NextIndexId.Value);
         BinaryPrimitives.WriteUInt64LittleEndian(data[66..], header.NextTransactionId.Value);
         BinaryPrimitives.WriteUInt64LittleEndian(data[74..], header.NextPageId.Value);
+        BinaryPrimitives.WriteUInt64LittleEndian(data[82..], header.NextRowVersion);
+        var collationLength = Utf8.GetByteCount(header.DefaultCollation);
+        BinaryPrimitives.WriteUInt16LittleEndian(data[90..], checked((ushort)collationLength));
+        Utf8.GetBytes(header.DefaultCollation, data.Slice(92, collationLength));
+        BinaryPrimitives.WriteUInt64LittleEndian(data[220..], header.NextGeneratedSequence);
         PageChecksum.WriteChecksum(page, header.PageSize);
     }
 
@@ -72,7 +84,9 @@ public static class DatabaseHeaderCodec
             new TableId(BinaryPrimitives.ReadUInt64LittleEndian(data[50..])),
             new IndexId(BinaryPrimitives.ReadUInt64LittleEndian(data[58..])),
             new TransactionId(BinaryPrimitives.ReadUInt64LittleEndian(data[66..])),
-            new PageId(BinaryPrimitives.ReadUInt64LittleEndian(data[74..])), data[26] == 1);
+            new PageId(BinaryPrimitives.ReadUInt64LittleEndian(data[74..])), data[26] == 1,
+            BinaryPrimitives.ReadUInt64LittleEndian(data[82..]), ReadCollation(data),
+            BinaryPrimitives.ReadUInt64LittleEndian(data[220..]));
     }
 
     private static void ValidateBufferAndHeader(Span<byte> page, DatabaseHeader header)
@@ -81,6 +95,22 @@ public static class DatabaseHeaderCodec
         if (!PageConstants.IsSupportedSize(header.PageSize)) throw new InvalidPageSizeException(header.PageSize);
         if (header.FormatVersion != DatabaseHeader.CurrentFormatVersion) throw new UnsupportedDatabaseVersionException(header.FormatVersion);
         if (header.NextPageId.Value == 0) throw new ArgumentOutOfRangeException(nameof(header), "Next page ID must follow page zero.");
+        if (header.NextRowVersion == 0) throw new ArgumentOutOfRangeException(nameof(header), "Next rowversion must be nonzero.");
+        if (header.NextGeneratedSequence == 0) throw new ArgumentOutOfRangeException(nameof(header), "Next generated sequence must be nonzero.");
+        _ = SqlCollation.Parse(header.DefaultCollation);
+        if (Utf8.GetByteCount(header.DefaultCollation) > MaximumCollationNameBytes)
+            throw new ArgumentOutOfRangeException(nameof(header), "Default collation name is too long.");
+    }
+
+    private static string ReadCollation(ReadOnlySpan<byte> data)
+    {
+        var length = BinaryPrimitives.ReadUInt16LittleEndian(data[90..]);
+        if (length is 0 or > MaximumCollationNameBytes) throw new StorageFormatException("Invalid default collation length.");
+        if (data.Slice(92 + length, MaximumCollationNameBytes - length).ContainsAnyExcept((byte)0))
+            throw new StorageFormatException("Reserved default-collation bytes must be zero.");
+        try { var name = Utf8.GetString(data.Slice(92, length)); _ = SqlCollation.Parse(name); return name; }
+        catch (Exception exception) when (exception is DecoderFallbackException or ArgumentException)
+        { throw new StorageFormatException("Invalid database default collation.", exception); }
     }
 
     private static void WriteOptionalPage(Span<byte> destination, PageId? value)

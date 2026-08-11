@@ -8,8 +8,8 @@ public sealed record StorageLimits
     public const int MaximumBufferFrames = 1_000_000;
     public const int MaximumRowBytes = 16 * 1024 * 1024;
     public const int MaximumKeyBytes = ushort.MaxValue;
-    public const long MaximumValueBytes = 64L * 1024 * 1024;
-    public const int MaximumOverflowPages = 8192;
+    public const long MaximumValueBytes = int.MaxValue;
+    public const int MaximumOverflowPages = Overflow.OverflowReferenceCodec.MaximumChainLength;
     public const int MaximumTransactionSeconds = 86400;
     public const long MaximumUndoBytes = 256L * 1024 * 1024;
     public const int MaximumPinsPerTransaction = 65536;

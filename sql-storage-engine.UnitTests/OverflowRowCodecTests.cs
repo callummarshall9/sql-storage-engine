@@ -30,7 +30,7 @@ public sealed class OverflowRowCodecTests
 
         var boundary = await codec.EncodeAsync(new Row(new[]
         {
-            SqlValue.Text(new string('x', 16)), SqlValue.Binary(new byte[] { 1 })
+            SqlValue.Text(new string('x', 8)), SqlValue.Binary(new byte[] { 1 })
         }), schema);
         codec.GetStorage(boundary.Bytes, schema, new ColumnId(1)).Should().Be(RowValueStorage.Inline);
     }
@@ -85,7 +85,7 @@ public sealed class OverflowRowCodecTests
 
     private static TableDefinition Schema() => new(new[]
     {
-        new ColumnDefinition(new ColumnId(1), "text", SqlType.Text, false),
-        new ColumnDefinition(new ColumnId(2), "bytes", SqlType.Binary, false)
+        new ColumnDefinition(new ColumnId(1), "text", SqlType.NVarCharMax(), false),
+        new ColumnDefinition(new ColumnId(2), "bytes", SqlType.VarBinaryMax, false)
     });
 }

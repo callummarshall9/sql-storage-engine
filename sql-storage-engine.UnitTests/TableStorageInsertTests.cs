@@ -78,8 +78,8 @@ public sealed class TableStorageInsertTests
             var pool = new BufferPool(pages, 16, leaveOpen: true);
             var heap = await TableHeap.CreateAsync(pool, pages);
             var definition = new CatalogTable(new TableId(1), "items", 1, heap.RootPageId,
-                [new CatalogColumn(new ColumnId(1), "key", SqlType.Integer, false),
-                 new CatalogColumn(new ColumnId(2), "value", SqlType.Text, true)]);
+                [new CatalogColumn(new ColumnId(1), "key", SqlType.Int, false),
+                 new CatalogColumn(new ColumnId(2), "value", SqlType.VarChar(8000), true)]);
             var indexes = new List<TableIndex>();
             foreach (var (id, column, unique) in new[] { (1UL, 1UL, uniqueFirst), (2UL, 2UL, false) })
             {

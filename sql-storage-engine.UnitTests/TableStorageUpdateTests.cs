@@ -34,15 +34,18 @@ public sealed class TableStorageUpdateTests
         await using var fixture = await TableStorageInsertTests.Fixture.CreateAsync(inlineThreshold: 6000);
         var original = new Row([SqlValue.Integer(7), SqlValue.Text("old")]);
         var id = await fixture.Table.InsertAsync(original);
-        await fixture.Table.InsertAsync(new Row([SqlValue.Integer(8), SqlValue.Text(new string('f', 5000))]));
+        await fixture.Table.InsertAsync(new Row([SqlValue.Integer(8), SqlValue.Text(new string('f', 1600))]));
+        await fixture.Table.InsertAsync(new Row([SqlValue.Integer(9), SqlValue.Text(new string('g', 1600))]));
+        await fixture.Table.InsertAsync(new Row([SqlValue.Integer(10), SqlValue.Text(new string('h', 1600))]));
+        await fixture.Table.InsertAsync(new Row([SqlValue.Integer(11), SqlValue.Text(new string('i', 1600))]));
 
         var result = await fixture.Table.UpdateAsync(id,
-            new RowUpdate([new ColumnUpdate(1, SqlValue.Text(new string('n', 4000)))]));
+            new RowUpdate([new ColumnUpdate(1, SqlValue.Text(new string('n', 1700)))]));
 
         result.Relocated.Should().BeTrue();
         (await fixture.Table.TryGetAsync(id)).Found.Should().BeFalse();
         (await fixture.Table.TryGetAsync(result.CurrentRowId)).Found.Should().BeTrue();
-        var updated = new Row([SqlValue.Integer(7), SqlValue.Text(new string('n', 4000))]);
+        var updated = new Row([SqlValue.Integer(7), SqlValue.Text(new string('n', 1700))]);
         foreach (var index in fixture.Indexes)
             (await index.Tree.FindAsync(CatalogIndexKey.Encode(updated, fixture.Definition, index.Definition)))
                 .Should().Equal(result.CurrentRowId);

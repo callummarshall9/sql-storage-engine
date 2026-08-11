@@ -1,6 +1,6 @@
 # Overflow format version 1
 
-Overflow chains exclusively own their pages. A row stores a 16-byte little-endian reference: eight-byte first `PageId`, followed by an eight-byte signed total length. Page zero is never valid, and total length is between 1 byte and 64 MiB.
+Overflow chains exclusively own their pages. A row stores a 16-byte little-endian reference: eight-byte first `PageId`, followed by an eight-byte signed total length. Page zero is never valid, and total length is between 1 byte and `2^31-1` bytes.
 
 Each overflow page begins with the 32-byte common page header and uses page type `Overflow`.
 
@@ -13,4 +13,4 @@ Each overflow page begins with the 32-byte common page header and uses page type
 | 48 | used length | Payload | Raw bytes |
 | remainder | variable | Unused | Written as zero |
 
-The common checksum covers the complete page. Readers are bounded to at most 8,192 pages and 64 MiB, validate type, identity, checksum, links, used lengths, cycles, and the exact reference length before returning bytes.
+The common checksum covers the complete page. Readers are bounded to at most 530,505 pages (enough for a maximum LOB on 4KB pages), and validate type, identity, checksum, links, used lengths, cycles, and exact reference length before returning bytes.

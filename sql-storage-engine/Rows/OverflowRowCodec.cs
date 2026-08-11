@@ -35,8 +35,8 @@ public sealed class OverflowRowCodec
         {
             for (var index = 0; index < table.Columns.Count; index++)
             {
-                if (table.Columns[index].Type is not (SqlType.Text or SqlType.Binary) || row.Values[index].IsNull) continue;
-                var bytes = GetVariableBytes(row.Values[index]);
+                if (!RowCodec.IsVariable(table.Columns[index]) || row.Values[index].IsNull) continue;
+                var bytes = RowCodec.EncodeVariableValue(row.Values[index], table.Columns[index]);
                 if (bytes.Length <= InlineThreshold) continue;
                 var reference = await _overflowManager.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
                 references.Add(index, reference);
@@ -67,7 +67,7 @@ public sealed class OverflowRowCodec
                 if (!column.IsNullable) throw new StorageFormatException($"Non-nullable column '{column.Name}' is encoded as NULL.");
                 values[index] = SqlValue.Null;
             }
-            else if (!RowCodec.IsVariable(column.Type))
+            else if (!RowCodec.IsVariable(column))
                 values[index] = RowCodec.DecodeFixedValue(source.Span[fixedOffset..], column);
             else
             {
@@ -79,10 +79,9 @@ public sealed class OverflowRowCodec
                         OverflowReferenceCodec.Read(source.Span.Slice(entry.Offset, entry.Length)), cancellationToken).ConfigureAwait(false),
                     _ => throw new StorageFormatException("Non-null variable value has invalid storage.")
                 };
-                values[index] = column.Type == SqlType.Text
-                    ? DecodeText(bytes.Span, column.Name)
-                    : SqlValue.Binary(bytes.Span);
+                values[index] = RowCodec.DecodeVariableValue(bytes.Span, column);
             }
+            RowCodec.ValidateDecodedValue(values[index], column);
             fixedOffset = checked(fixedOffset + RowCodec.GetFixedWidth(column));
         }
         return new Row(values);
@@ -118,8 +117,8 @@ public sealed class OverflowRowCodec
             }
             foreach (var index in updatedIndexes)
             {
-                if (table.Columns[index].Type is not (SqlType.Text or SqlType.Binary) || replacement.Values[index].IsNull) continue;
-                var bytes = GetVariableBytes(replacement.Values[index]);
+                if (!RowCodec.IsVariable(table.Columns[index]) || replacement.Values[index].IsNull) continue;
+                var bytes = RowCodec.EncodeVariableValue(replacement.Values[index], table.Columns[index]);
                 if (bytes.Length <= InlineThreshold) continue;
                 var reference = await _overflowManager.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
                 outputReferences.Add(index, reference);
@@ -140,7 +139,8 @@ public sealed class OverflowRowCodec
         var index = table.Columns.Select((column, position) => (column, position))
             .Where(item => item.column.Id == columnId).Select(item => item.position).DefaultIfEmpty(-1).Single();
         if (index < 0) throw new ArgumentException("Unknown column ID.", nameof(columnId));
-        if (table.Columns[index].Type is not (SqlType.Text or SqlType.Binary)) return RowValueStorage.Inline;
+        if (!RowCodec.IsVariable(table.Columns[index])) return RowValueStorage.Inline;
+        if ((row[RowCodec.HeaderLength + index / 8] & (1 << (index % 8))) != 0) return RowValueStorage.Null;
         var header = RowCodec.ReadAndValidateHeader(row, table);
         return RowCodec.ReadVariableEntries(row, table, header)[index].Storage;
     }
@@ -157,19 +157,6 @@ public sealed class OverflowRowCodec
             if (pair.Value.Storage == RowValueStorage.Overflow)
                 result.Add(pair.Key, OverflowReferenceCodec.Read(row.Slice(pair.Value.Offset, pair.Value.Length)));
         return result;
-    }
-
-    private static byte[] GetVariableBytes(SqlValue value) => value switch
-    {
-        TextSqlValue text => RowCodec.Utf8.GetBytes(text.Value),
-        BinarySqlValue binary => binary.Value.ToArray(),
-        _ => throw new ArgumentException("Value is not variable-width.", nameof(value))
-    };
-
-    private static SqlValue DecodeText(ReadOnlySpan<byte> bytes, string columnName)
-    {
-        try { return SqlValue.Text(RowCodec.Utf8.GetString(bytes)); }
-        catch (DecoderFallbackException exception) { throw new StorageFormatException($"Column '{columnName}' contains invalid UTF-8.", exception); }
     }
 
     private async ValueTask CleanupNewAsync(IReadOnlyList<OverflowReference> references)

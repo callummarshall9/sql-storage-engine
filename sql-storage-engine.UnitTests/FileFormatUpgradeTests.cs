@@ -21,16 +21,18 @@ public sealed class FileFormatUpgradeTests
             .Should().ThrowAsync<SimulatedProcessTerminationException>();
 
         await manager.UpgradeAsync(paths.Database, paths.Backup, integrityCheck: async (path, token) =>
-        { await using var database = await PageDatabase.OpenAsync(path, DatabaseOpenMode.ReadOnly, token); return database.Header.FormatVersion == 1; });
+        { await using var database = await PageDatabase.OpenAsync(path, DatabaseOpenMode.ReadOnly, token); return database.Header.FormatVersion == DatabaseHeader.CurrentFormatVersion; });
 
         manager.CurrentProgress!.Status.Should().Be(UpgradeStatus.Complete);
-        manager.Activity.Should().Contain("step:0-to-1").And.Contain("complete:1");
+        manager.Activity.Should().Contain($"step:0-to-{DatabaseHeader.CurrentFormatVersion}")
+            .And.Contain($"complete:{DatabaseHeader.CurrentFormatVersion}");
         await using var reopened = await PageDatabase.OpenAsync(paths.Database, DatabaseOpenMode.ReadOnly);
-        reopened.Header.FormatVersion.Should().Be(1);
+        reopened.Header.FormatVersion.Should().Be(DatabaseHeader.CurrentFormatVersion);
     }
 
-    [TestCase((ushort)2, (ushort)1)]
+    [TestCase((ushort)4, (ushort)3)]
     [TestCase((ushort)1, (ushort)0)]
+    [TestCase((ushort)1, (ushort)2)]
     public async Task UnsupportedSourceAndDowngradeFailBeforeModification(ushort source, ushort target)
     {
         using var paths = new Paths(); await CreateSourceAndBackup(paths); MakeLegacy(paths.Database, source);

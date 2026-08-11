@@ -17,8 +17,8 @@ public sealed class StorageEngineApiTests
             {
                 var table = await engine.CreateTableAsync("items",
                 [
-                    new CatalogColumn(new ColumnId(1), "id", SqlType.Integer, false),
-                    new CatalogColumn(new ColumnId(2), "name", SqlType.Text, true)
+                    new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false),
+                    new CatalogColumn(new ColumnId(2), "name", SqlType.NVarChar(4000), true)
                 ]);
                 var index = await engine.CreateIndexAsync("items_by_id", table.Id, true,
                 [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.Last)]);

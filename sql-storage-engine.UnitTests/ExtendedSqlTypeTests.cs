@@ -56,7 +56,7 @@ public sealed class ExtendedSqlTypeTests
         ]), schema);
 
         // The fixed region starts after the 32-byte header and one-byte null bitmap.
-        encoded[33 + 12] = 1; // Decimal flags contain reserved bits.
+        encoded[33] = 2; // Decimal sign is encoded as zero or one.
         ((Func<Row>)(() => RowCodec.Decode(encoded, schema))).Should().Throw<StorageFormatException>();
 
         encoded = RowCodec.Encode(new Row([
@@ -64,7 +64,7 @@ public sealed class ExtendedSqlTypeTests
             SqlValue.DateTime(DateTime.MinValue), SqlValue.DateTimeOffset(DateTimeOffset.MinValue),
             SqlValue.UniqueIdentifier(Guid.Empty)
         ]), schema);
-        BinaryPrimitives.WriteDoubleLittleEndian(encoded.AsSpan(33 + 16), double.NaN);
+        BinaryPrimitives.WriteDoubleLittleEndian(encoded.AsSpan(33 + 17), double.NaN);
         ((Func<Row>)(() => RowCodec.Decode(encoded, schema))).Should().Throw<StorageFormatException>();
 
         encoded = RowCodec.Encode(new Row([
@@ -72,43 +72,44 @@ public sealed class ExtendedSqlTypeTests
             SqlValue.DateTime(DateTime.MinValue), SqlValue.DateTimeOffset(DateTimeOffset.MinValue),
             SqlValue.UniqueIdentifier(Guid.Empty)
         ]), schema);
-        BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(33 + 16 + 8), int.MaxValue);
+        BinaryPrimitives.WriteInt32LittleEndian(encoded.AsSpan(33 + 17 + 8), int.MaxValue);
         ((Func<Row>)(() => RowCodec.Decode(encoded, schema))).Should().Throw<StorageFormatException>();
     }
 
     [Test]
     public void ExtendedIndexKeys_FollowLogicalOrderAndCanonicalEquality()
     {
-        AssertIndexOrder(SqlType.Decimal,
+        AssertIndexOrder(SqlType.Decimal(31, 2),
             [SqlValue.Decimal(decimal.MinValue), SqlValue.Decimal(-1m), SqlValue.Decimal(0m), SqlValue.Decimal(.01m), SqlValue.Decimal(decimal.MaxValue)]);
-        AssertIndexOrder(SqlType.Float,
+        AssertIndexOrder(SqlType.Float(),
             [SqlValue.Float(-double.MaxValue), SqlValue.Float(-1d), SqlValue.Float(0d), SqlValue.Float(.01d), SqlValue.Float(double.MaxValue)]);
         AssertIndexOrder(SqlType.Date,
             [SqlValue.Date(DateOnly.MinValue), SqlValue.Date(new DateOnly(2026, 8, 11)), SqlValue.Date(DateOnly.MaxValue)]);
-        AssertIndexOrder(SqlType.Time,
+        AssertIndexOrder(SqlType.Time(),
             [SqlValue.Time(TimeOnly.MinValue), SqlValue.Time(new TimeOnly(12, 0)), SqlValue.Time(TimeOnly.MaxValue)]);
-        AssertIndexOrder(SqlType.DateTime,
+        AssertIndexOrder(SqlType.DateTime2(),
             [SqlValue.DateTime(DateTime.MinValue), SqlValue.DateTime(new DateTime(2026, 8, 11)), SqlValue.DateTime(DateTime.MaxValue)]);
         AssertIndexOrder(SqlType.UniqueIdentifier,
             [SqlValue.UniqueIdentifier(Guid.Empty), SqlValue.UniqueIdentifier(Identifier), SqlValue.UniqueIdentifier(Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff"))]);
 
-        EncodeKey(SqlType.Decimal, SqlValue.Decimal(1m)).Should().Be(EncodeKey(SqlType.Decimal, SqlValue.Decimal(1.00m)));
-        EncodeKey(SqlType.DateTimeOffset, SqlValue.DateTimeOffset(new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero)))
-            .Should().Be(EncodeKey(SqlType.DateTimeOffset,
+        EncodeKey(SqlType.Decimal(38, 2), SqlValue.Decimal(1m)).Should().Be(EncodeKey(SqlType.Decimal(38, 2), SqlValue.Decimal(1.00m)));
+        EncodeKey(SqlType.DateTimeOffset(), SqlValue.DateTimeOffset(new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero)))
+            .Should().Be(EncodeKey(SqlType.DateTimeOffset(),
                 SqlValue.DateTimeOffset(new DateTimeOffset(2026, 8, 11, 13, 0, 0, TimeSpan.FromHours(1)))));
     }
 
     [Test]
     public void Catalog_RoundTripsEveryExtendedTypeTag()
     {
-        var columns = Enum.GetValues<SqlType>().Select((type, index) =>
-            new CatalogColumn(new ColumnId(checked((ulong)index + 1)), type.ToString(), type, true)).ToArray();
+        var types = RepresentativeTypes();
+        var columns = types.Select((type, index) =>
+            new CatalogColumn(new ColumnId(checked((ulong)index + 1)), $"{type}_{index}", type, true)).ToArray();
         var catalog = new CatalogDefinition([
             new CatalogTable(new TableId(1), "all_types", 1, new PageId(2), columns)
         ], []);
 
         CatalogCodec.Decode(CatalogCodec.Encode(catalog)).Tables.Single().Columns
-            .Select(column => column.Type).Should().Equal(Enum.GetValues<SqlType>());
+            .Select(column => column.Type).Should().Equal(types);
     }
 
     [Test]
@@ -169,12 +170,25 @@ public sealed class ExtendedSqlTypeTests
     }
 
     private static TableDefinition Schema() => new([
-        new ColumnDefinition(new ColumnId(1), "decimal", SqlType.Decimal, false),
-        new ColumnDefinition(new ColumnId(2), "float", SqlType.Float, false),
+        new ColumnDefinition(new ColumnId(1), "decimal", SqlType.Decimal(38, 9), false),
+        new ColumnDefinition(new ColumnId(2), "float", SqlType.Float(), false),
         new ColumnDefinition(new ColumnId(3), "date", SqlType.Date, false),
-        new ColumnDefinition(new ColumnId(4), "time", SqlType.Time, false),
-        new ColumnDefinition(new ColumnId(5), "datetime", SqlType.DateTime, false),
-        new ColumnDefinition(new ColumnId(6), "datetimeoffset", SqlType.DateTimeOffset, false),
+        new ColumnDefinition(new ColumnId(4), "time", SqlType.Time(), false),
+        new ColumnDefinition(new ColumnId(5), "datetime", SqlType.DateTime2(), false),
+        new ColumnDefinition(new ColumnId(6), "datetimeoffset", SqlType.DateTimeOffset(), false),
         new ColumnDefinition(new ColumnId(7), "identifier", SqlType.UniqueIdentifier, false)
     ]);
+
+    private static SqlType[] RepresentativeTypes() =>
+    [
+        SqlType.Bit, SqlType.TinyInt, SqlType.SmallInt, SqlType.Int, SqlType.BigInt,
+        SqlType.Decimal(38, 10), SqlType.Numeric(12, 3), SqlType.SmallMoney, SqlType.Money,
+        SqlType.Real, SqlType.Float(), SqlType.Date, SqlType.Time(3), SqlType.SmallDateTime,
+        SqlType.DateTime, SqlType.DateTime2(7), SqlType.DateTimeOffset(7),
+        SqlType.Char(8, "Latin1_General_100_BIN2"), SqlType.VarChar(20), SqlType.Text,
+        SqlType.NChar(8), SqlType.NVarChar(20), SqlType.NText, SqlType.Binary(8),
+        SqlType.VarBinary(20), SqlType.Image, SqlType.Timestamp, SqlType.UniqueIdentifier,
+        SqlType.Xml, SqlType.Json, SqlType.SqlVariant, SqlType.HierarchyId, SqlType.Geometry,
+        SqlType.Geography, SqlType.Vector(3)
+    ];
 }

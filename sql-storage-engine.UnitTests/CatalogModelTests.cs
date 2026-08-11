@@ -10,8 +10,8 @@ public sealed class CatalogModelTests
     [Test]
     public void Models_PreserveTypedIdentityNullabilityAndCompositeSortConfiguration()
     {
-        var table = Table(new CatalogColumn(new ColumnId(1), "first", SqlType.Text, true),
-            new CatalogColumn(new ColumnId(2), "second", SqlType.Integer, false));
+        var table = Table(new CatalogColumn(new ColumnId(1), "first", SqlType.NVarChar(100), true),
+            new CatalogColumn(new ColumnId(2), "second", SqlType.BigInt, false));
         var index = new CatalogIndex(new IndexId(9), "by_values", table.Id, new PageId(22), true,
         [
             new CatalogIndexedColumn(new ColumnId(1), SortDirection.Descending, NullSortOrder.Last, "ordinal"),
@@ -30,7 +30,7 @@ public sealed class CatalogModelTests
     [Test]
     public void Names_AreMutableMetadataIndependentOfStablePhysicalIdentifiers()
     {
-        var original = Table(new CatalogColumn(new ColumnId(1), "value", SqlType.Integer, false));
+        var original = Table(new CatalogColumn(new ColumnId(1), "value", SqlType.BigInt, false));
         var renamed = new CatalogTable(original.Id, "renamed", original.SchemaVersion + 1,
             original.FirstHeapPageId, original.Columns);
 
@@ -48,9 +48,9 @@ public sealed class CatalogModelTests
     [Test]
     public void Collections_AreSnapshotsAndCannotBeMutatedThroughPublicApi()
     {
-        var source = new List<CatalogColumn> { new(new ColumnId(1), "value", SqlType.Integer, false) };
+        var source = new List<CatalogColumn> { new(new ColumnId(1), "value", SqlType.BigInt, false) };
         var table = new CatalogTable(new TableId(1), "items", 1, new PageId(4), source);
-        source.Add(new CatalogColumn(new ColumnId(2), "later", SqlType.Text, true));
+        source.Add(new CatalogColumn(new ColumnId(2), "later", SqlType.NVarChar(4000), true));
 
         table.Columns.Should().HaveCount(1);
         table.Columns.Should().BeAssignableTo<IReadOnlyList<CatalogColumn>>();
@@ -58,7 +58,7 @@ public sealed class CatalogModelTests
 
     private static IEnumerable<TestCaseData> InvalidCatalogs()
     {
-        var table = Table(new CatalogColumn(new ColumnId(1), "value", SqlType.Integer, false));
+        var table = Table(new CatalogColumn(new ColumnId(1), "value", SqlType.BigInt, false));
         yield return new TestCaseData(() => new CatalogDefinition([table,
             new CatalogTable(table.Id, "other", table.SchemaVersion, table.FirstHeapPageId, table.Columns)], []))
             .SetName("Duplicate table ID");
@@ -73,11 +73,11 @@ public sealed class CatalogModelTests
         yield return new TestCaseData(() => new CatalogDefinition([table],
             [Index(new IndexId(1), "index", table.Id, new ColumnId(99))])).SetName("Unknown column");
         yield return new TestCaseData((Func<CatalogDefinition>)(() => new CatalogDefinition([Table(
-            new CatalogColumn(new ColumnId(1), "one", SqlType.Integer, false),
-            new CatalogColumn(new ColumnId(1), "two", SqlType.Integer, false))], []))).SetName("Duplicate column ID");
+            new CatalogColumn(new ColumnId(1), "one", SqlType.BigInt, false),
+            new CatalogColumn(new ColumnId(1), "two", SqlType.BigInt, false))], []))).SetName("Duplicate column ID");
         yield return new TestCaseData((Func<CatalogDefinition>)(() => new CatalogDefinition([Table(
-            new CatalogColumn(new ColumnId(1), "same", SqlType.Integer, false),
-            new CatalogColumn(new ColumnId(2), "same", SqlType.Integer, false))], []))).SetName("Duplicate column name");
+            new CatalogColumn(new ColumnId(1), "same", SqlType.BigInt, false),
+            new CatalogColumn(new ColumnId(2), "same", SqlType.BigInt, false))], []))).SetName("Duplicate column name");
     }
 
     private static CatalogTable Table(params CatalogColumn[] columns) =>

@@ -13,8 +13,9 @@ public readonly record struct OverflowPageHeader(PageId? NextPageId, uint UsedLe
 public static class OverflowReferenceCodec
 {
     public const int EncodedLength = 16;
-    public const long MaximumValueLength = 64L * 1024 * 1024;
-    public const int MaximumChainLength = 8192;
+    public const long MaximumValueLength = int.MaxValue;
+    // Enough pages for a 2GB SQL LOB even with the minimum supported 4KB page size.
+    public const int MaximumChainLength = 530_505;
 
     public static void Write(Span<byte> destination, OverflowReference reference)
     {

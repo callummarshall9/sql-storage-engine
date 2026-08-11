@@ -65,7 +65,7 @@ public sealed class VariableRowCodecTests
     [Test]
     public void Encode_EnforcesMaximumInlineValueLength()
     {
-        var schema = new TableDefinition(new[] { new ColumnDefinition(new ColumnId(1), "bytes", SqlType.Binary, false) });
+        var schema = new TableDefinition(new[] { new ColumnDefinition(new ColumnId(1), "bytes", SqlType.VarBinaryMax, false) });
         var oversized = new byte[RowCodec.MaximumInlineValueLength + 1];
         ((Func<byte[]>)(() => RowCodec.Encode(new Row(new[] { SqlValue.Binary(oversized) }), schema)))
             .Should().Throw<ArgumentException>();
@@ -73,9 +73,9 @@ public sealed class VariableRowCodecTests
 
     private static TableDefinition Schema() => new(new[]
     {
-        new ColumnDefinition(new ColumnId(1), "id", SqlType.Integer, false),
-        new ColumnDefinition(new ColumnId(2), "name", SqlType.Text, false),
-        new ColumnDefinition(new ColumnId(3), "bytes", SqlType.Binary, false),
-        new ColumnDefinition(new ColumnId(4), "note", SqlType.Text, true)
+        new ColumnDefinition(new ColumnId(1), "id", SqlType.Int, false),
+        new ColumnDefinition(new ColumnId(2), "name", SqlType.NVarChar(4000), false),
+        new ColumnDefinition(new ColumnId(3), "bytes", SqlType.VarBinaryMax, false),
+        new ColumnDefinition(new ColumnId(4), "note", SqlType.NVarChar(4000), true)
     });
 }
