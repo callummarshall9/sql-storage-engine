@@ -10,7 +10,14 @@ public enum SqlType : byte
     Boolean = 1,
     Integer = 2,
     Text = 3,
-    Binary = 4
+    Binary = 4,
+    Decimal = 5,
+    Float = 6,
+    Date = 7,
+    Time = 8,
+    DateTime = 9,
+    DateTimeOffset = 10,
+    UniqueIdentifier = 11
 }
 
 public enum SqlComparison
@@ -32,6 +39,13 @@ public abstract record SqlValue
     public static SqlValue Integer(long value) => new IntegerSqlValue(value);
     public static SqlValue Text(string value) => new TextSqlValue(value ?? throw new ArgumentNullException(nameof(value)));
     public static SqlValue Binary(ReadOnlySpan<byte> value) => new BinarySqlValue(value);
+    public static SqlValue Decimal(decimal value) => new DecimalSqlValue(value);
+    public static SqlValue Float(double value) => new FloatSqlValue(value);
+    public static SqlValue Date(DateOnly value) => new DateSqlValue(value);
+    public static SqlValue Time(TimeOnly value) => new TimeSqlValue(value);
+    public static SqlValue DateTime(System.DateTime value) => new DateTimeSqlValue(value);
+    public static SqlValue DateTimeOffset(System.DateTimeOffset value) => new DateTimeOffsetSqlValue(value);
+    public static SqlValue UniqueIdentifier(Guid value) => new UniqueIdentifierSqlValue(value);
 
     /// <summary>Converts only supported runtime representations; arbitrary objects are rejected.</summary>
     public static SqlValue From(object? value) => value switch
@@ -42,6 +56,14 @@ public abstract record SqlValue
         string text => Text(text),
         byte[] bytes => Binary(bytes),
         ReadOnlyMemory<byte> bytes => Binary(bytes.Span),
+        decimal exact => Decimal(exact),
+        double approximate => Float(approximate),
+        float approximate => Float(approximate),
+        DateOnly date => Date(date),
+        TimeOnly time => Time(time),
+        System.DateTime dateTime => DateTime(dateTime),
+        System.DateTimeOffset dateTimeOffset => DateTimeOffset(dateTimeOffset),
+        Guid identifier => UniqueIdentifier(identifier),
         _ => throw new ArgumentException($"Unsupported SQL runtime representation '{value.GetType().FullName}'.", nameof(value))
     };
 
@@ -57,6 +79,13 @@ public abstract record SqlValue
             (IntegerSqlValue a, IntegerSqlValue b) => a.Value.CompareTo(b.Value),
             (TextSqlValue a, TextSqlValue b) => string.CompareOrdinal(a.Value, b.Value),
             (BinarySqlValue a, BinarySqlValue b) => a.Value.Span.SequenceCompareTo(b.Value.Span),
+            (DecimalSqlValue a, DecimalSqlValue b) => a.Value.CompareTo(b.Value),
+            (FloatSqlValue a, FloatSqlValue b) => a.Value.CompareTo(b.Value),
+            (DateSqlValue a, DateSqlValue b) => a.Value.CompareTo(b.Value),
+            (TimeSqlValue a, TimeSqlValue b) => a.Value.CompareTo(b.Value),
+            (DateTimeSqlValue a, DateTimeSqlValue b) => a.Value.CompareTo(b.Value),
+            (DateTimeOffsetSqlValue a, DateTimeOffsetSqlValue b) => a.Value.CompareTo(b.Value),
+            (UniqueIdentifierSqlValue a, UniqueIdentifierSqlValue b) => a.Value.CompareTo(b.Value),
             _ => throw new InvalidOperationException("Unknown SQL value representation.")
         };
         return comparison switch { < 0 => SqlComparison.Less, > 0 => SqlComparison.Greater, _ => SqlComparison.Equal };
@@ -98,6 +127,51 @@ public sealed record BinarySqlValue : SqlValue
         foreach (var value in _value) hash.Add(value);
         return hash.ToHashCode();
     }
+}
+
+public sealed record DecimalSqlValue(decimal Value) : SqlValue
+{
+    public override SqlType? Type => SqlType.Decimal;
+}
+
+public sealed record FloatSqlValue : SqlValue
+{
+    public FloatSqlValue(double value)
+    {
+        if (!double.IsFinite(value))
+            throw new ArgumentOutOfRangeException(nameof(value), "SQL floating-point values must be finite.");
+        Value = value == 0d ? 0d : value; // Give -0 and +0 one persistent and indexed representation.
+    }
+
+    public double Value { get; }
+    public override SqlType? Type => SqlType.Float;
+}
+
+public sealed record DateSqlValue(DateOnly Value) : SqlValue
+{
+    public override SqlType? Type => SqlType.Date;
+}
+
+public sealed record TimeSqlValue(TimeOnly Value) : SqlValue
+{
+    public override SqlType? Type => SqlType.Time;
+}
+
+public sealed record DateTimeSqlValue : SqlValue
+{
+    public DateTimeSqlValue(System.DateTime value) => Value = new System.DateTime(value.Ticks, DateTimeKind.Unspecified);
+    public System.DateTime Value { get; }
+    public override SqlType? Type => SqlType.DateTime;
+}
+
+public sealed record DateTimeOffsetSqlValue(System.DateTimeOffset Value) : SqlValue
+{
+    public override SqlType? Type => SqlType.DateTimeOffset;
+}
+
+public sealed record UniqueIdentifierSqlValue(Guid Value) : SqlValue
+{
+    public override SqlType? Type => SqlType.UniqueIdentifier;
 }
 
 public sealed record ColumnDefinition

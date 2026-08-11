@@ -1,8 +1,17 @@
 # Logical values and row format
 
-The initial logical type system supports boolean, signed 64-bit integer, text, binary, and SQL `NULL`. `NULL` is a dedicated `SqlValue` and is distinct from `false`, zero, empty text, and empty binary. A column definition has a stable unsigned `ColumnId`, an ordinally unique name, a declared type, and nullability. Schema validation rejects nulls in non-nullable columns, mismatched value types, duplicate IDs/names, and unsupported CLR objects before encoding.
+The logical type system supports boolean, signed 64-bit integer, exact decimal, finite double-precision float, text,
+binary, date, time, date-time, date-time with offset, unique identifier, and SQL `NULL`. Integer storage is shared by
+the SQL integer-width families; text and binary storage are likewise shared by their length/family variants. `NULL` is
+a dedicated `SqlValue` and is distinct from false, zero, empty text, and empty binary. A column definition has a stable
+unsigned `ColumnId`, an ordinally unique name, a declared type, and nullability. Schema validation rejects nulls in
+non-nullable columns, mismatched value types, duplicate IDs/names, non-finite floating-point numbers, and unsupported
+CLR objects before encoding.
 
-Logical comparison is type-strict and deterministic: integers and booleans use their natural order, text uses ordinal Unicode comparison, and binary uses unsigned lexicographic byte order. Any comparison involving SQL `NULL` returns `Unknown`; two nulls are not treated as a SQL equality result.
+Logical comparison is type-strict and deterministic: numeric and temporal values use their natural CLR order, text
+uses ordinal Unicode comparison, binary uses unsigned lexicographic byte order, date-time offsets compare by instant,
+and unique identifiers use `Guid.CompareTo`. Any comparison involving SQL `NULL` returns `Unknown`; two nulls are not
+treated as a SQL equality result.
 
 Persistent row layouts are versioned and use explicit little-endian integers. No CLR object or runtime type metadata is serialized.
 
@@ -21,7 +30,14 @@ Persistent row layouts are versioned and use explicit little-endian integers. No
 | 24 | 4 | FNV-1a schema fingerprint over column IDs, types, and nullability |
 | 28 | 4 | Reserved zero bytes |
 
-The null bitmap immediately follows the header, one bit per schema column. Fixed fields follow in schema order: booleans occupy one byte (`0` or `1`) and signed integers occupy eight little-endian two's-complement bytes. Null fixed fields retain zero-filled space so later field offsets are schema-derived. Persisted counts and lengths are checked against the supplied schema and the input span before any value array is allocated.
+The null bitmap immediately follows the header, one bit per schema column. Fixed fields follow in schema order:
+booleans occupy one byte (`0` or `1`); integers, floats, time, and date-time occupy eight bytes; dates occupy four;
+decimals and unique identifiers occupy sixteen; and date-time offsets occupy ten (UTC ticks plus signed offset minutes).
+Integers and temporal components are little-endian, floats use IEEE 754 binary64, decimals use the four documented
+.NET decimal words, and GUIDs use RFC 4122/network byte order. Date-times are stored without a CLR `DateTimeKind`;
+date-time offsets retain their original offset. Null fixed fields retain zero-filled space so later field offsets are
+schema-derived. Persisted counts and lengths are checked against the supplied schema and the input span before any
+value array is allocated.
 
 Variable columns have one 12-byte table entry in schema order: two-byte column index, two-byte storage tag (`0` null, `1` inline, `2` overflow), four-byte absolute offset, and four-byte byte length. Variable payloads are contiguous in that same order. Offsets must begin at the declared variable-data boundary and each must equal the previous field's end; this rejects gaps, overlap, decreasing offsets, and out-of-range lengths. Text uses strict UTF-8, while binary bytes are never text-converted. Empty non-null fields have length zero and are distinguished from null by the bitmap and tag. Inline fields are limited to 1 MiB and a complete encoded row to 16 MiB. Overflow entries contain exactly one 16-byte overflow reference.
 
