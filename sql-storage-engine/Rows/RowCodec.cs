@@ -36,7 +36,7 @@ public static class RowCodec
         var nullBytes = checked((table.Columns.Count + 7) / 8);
         var fixedLength = table.Columns.Sum(GetFixedWidth);
         var variableColumns = table.Columns.Select((column, index) => (column, index))
-            .Where(item => item.column.Type is SqlType.Text or SqlType.Binary).ToArray();
+            .Where(item => IsVariable(item.column.Type)).ToArray();
         var variableValues = new (RowValueStorage Storage, byte[] Bytes)[variableColumns.Length];
         var variableLength = 0;
         for (var variableIndex = 0; variableIndex < variableColumns.Length; variableIndex++)
@@ -82,10 +82,8 @@ public static class RowCodec
             var value = row.Values[index];
             if (value.IsNull)
                 bytes[HeaderLength + index / 8] |= checked((byte)(1 << (index % 8)));
-            else if (column.Type == SqlType.Boolean)
-                bytes[fixedOffset] = ((BooleanSqlValue)value).Value ? (byte)1 : (byte)0;
-            else if (column.Type == SqlType.Integer)
-                BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(fixedOffset), ((IntegerSqlValue)value).Value);
+            else if (!IsVariable(column.Type))
+                WriteFixedValue(bytes.AsSpan(fixedOffset), value);
             fixedOffset += GetFixedWidth(column);
         }
         var cursor = variableDataOffset;
@@ -118,19 +116,8 @@ public static class RowCodec
                 if (!column.IsNullable) throw new StorageFormatException($"Non-nullable column '{column.Name}' is encoded as NULL.");
                 values[index] = SqlValue.Null;
             }
-            else if (column.Type == SqlType.Boolean)
-            {
-                values[index] = source[fixedOffset] switch
-                {
-                    0 => SqlValue.Boolean(false),
-                    1 => SqlValue.Boolean(true),
-                    _ => throw new StorageFormatException($"Invalid boolean byte for column '{column.Name}'.")
-                };
-            }
-            else if (column.Type == SqlType.Integer)
-            {
-                values[index] = SqlValue.Integer(BinaryPrimitives.ReadInt64LittleEndian(source[fixedOffset..]));
-            }
+            else if (!IsVariable(column.Type))
+                values[index] = DecodeFixedValue(source[fixedOffset..], column);
             else if (column.Type == SqlType.Text)
             {
                 var entry = variables[index];
@@ -220,7 +207,7 @@ public static class RowCodec
             throw new StorageFormatException("Encoded row total length is invalid or truncated.");
         var fixedStart = checked((uint)(HeaderLength + expectedNullBytes));
         var fixedEnd = checked(fixedStart + header.FixedDataLength);
-        var expectedVariableCount = table.Columns.Count(column => column.Type is SqlType.Text or SqlType.Binary);
+        var expectedVariableCount = table.Columns.Count(column => IsVariable(column.Type));
         if (header.VariableCount != expectedVariableCount) throw new StorageFormatException("Variable-column count does not match schema.");
         var expectedVariableDataOffset = checked(fixedEnd + (uint)(expectedVariableCount * VariableEntryLength));
         if (header.VariableTableOffset != fixedEnd || header.VariableDataOffset != expectedVariableDataOffset ||
@@ -243,7 +230,7 @@ public static class RowCodec
     {
         Dictionary<int, VariableEntry> entries = [];
         var expectedColumnIndexes = table.Columns.Select((column, index) => (column, index))
-            .Where(item => item.column.Type is SqlType.Text or SqlType.Binary).Select(item => item.index).ToArray();
+            .Where(item => IsVariable(item.column.Type)).Select(item => item.index).ToArray();
         var cursor = checked((int)header.VariableDataOffset);
         for (var variableIndex = 0; variableIndex < expectedColumnIndexes.Length; variableIndex++)
         {
@@ -281,16 +268,10 @@ public static class RowCodec
         }
         return column.Type switch
         {
-            SqlType.Boolean => source[fixedOffset] switch
-            {
-                0 => SqlValue.Boolean(false), 1 => SqlValue.Boolean(true),
-                _ => throw new StorageFormatException($"Invalid boolean byte for column '{column.Name}'.")
-            },
-            SqlType.Integer => SqlValue.Integer(BinaryPrimitives.ReadInt64LittleEndian(source[fixedOffset..])),
             SqlType.Text when variables[columnIndex].Storage == RowValueStorage.Inline => DecodeText(source, variables[columnIndex], column.Name),
             SqlType.Binary when variables[columnIndex].Storage == RowValueStorage.Inline => SqlValue.Binary(source.Slice(variables[columnIndex].Offset, variables[columnIndex].Length)),
             SqlType.Text or SqlType.Binary => throw new StorageFormatException("Overflow row value requires OverflowRowCodec."),
-            _ => throw new StorageFormatException("Unknown SQL column type.")
+            _ => DecodeFixedValue(source[fixedOffset..], column)
         };
     }
 
@@ -300,13 +281,107 @@ public static class RowCodec
         catch (DecoderFallbackException exception) { throw new StorageFormatException($"Column '{columnName}' contains invalid UTF-8.", exception); }
     }
 
+    internal static bool IsVariable(SqlType type) => type is SqlType.Text or SqlType.Binary;
+
     internal static int GetFixedWidth(ColumnDefinition column) => column.Type switch
     {
         SqlType.Boolean => 1,
         SqlType.Integer => 8,
+        SqlType.Decimal => 16,
+        SqlType.Float => 8,
+        SqlType.Date => 4,
+        SqlType.Time => 8,
+        SqlType.DateTime => 8,
+        SqlType.DateTimeOffset => 10,
+        SqlType.UniqueIdentifier => 16,
         SqlType.Text or SqlType.Binary => 0,
         _ => throw new ArgumentOutOfRangeException(nameof(column))
     };
+
+    internal static void WriteFixedValue(Span<byte> destination, SqlValue value)
+    {
+        switch (value)
+        {
+            case BooleanSqlValue boolean:
+                destination[0] = boolean.Value ? (byte)1 : (byte)0;
+                break;
+            case IntegerSqlValue integer:
+                BinaryPrimitives.WriteInt64LittleEndian(destination, integer.Value);
+                break;
+            case DecimalSqlValue exact:
+                var bits = decimal.GetBits(exact.Value);
+                for (var index = 0; index < bits.Length; index++)
+                    BinaryPrimitives.WriteInt32LittleEndian(destination[(index * sizeof(int))..], bits[index]);
+                break;
+            case FloatSqlValue approximate:
+                BinaryPrimitives.WriteDoubleLittleEndian(destination, approximate.Value);
+                break;
+            case DateSqlValue date:
+                BinaryPrimitives.WriteInt32LittleEndian(destination, date.Value.DayNumber);
+                break;
+            case TimeSqlValue time:
+                BinaryPrimitives.WriteInt64LittleEndian(destination, time.Value.Ticks);
+                break;
+            case DateTimeSqlValue dateTime:
+                BinaryPrimitives.WriteInt64LittleEndian(destination, dateTime.Value.Ticks);
+                break;
+            case DateTimeOffsetSqlValue dateTimeOffset:
+                BinaryPrimitives.WriteInt64LittleEndian(destination, dateTimeOffset.Value.UtcTicks);
+                BinaryPrimitives.WriteInt16LittleEndian(destination[8..], checked((short)dateTimeOffset.Value.Offset.TotalMinutes));
+                break;
+            case UniqueIdentifierSqlValue identifier:
+                if (!identifier.Value.TryWriteBytes(destination, bigEndian: true, out var bytesWritten) || bytesWritten != 16)
+                    throw new InvalidOperationException("Could not encode SQL unique identifier.");
+                break;
+            default:
+                throw new ArgumentException("Value is not a supported fixed-width SQL value.", nameof(value));
+        }
+    }
+
+    internal static SqlValue DecodeFixedValue(ReadOnlySpan<byte> source, ColumnDefinition column)
+    {
+        try
+        {
+            return column.Type switch
+            {
+                SqlType.Boolean => source[0] switch
+                {
+                    0 => SqlValue.Boolean(false), 1 => SqlValue.Boolean(true),
+                    _ => throw new StorageFormatException($"Invalid boolean byte for column '{column.Name}'.")
+                },
+                SqlType.Integer => SqlValue.Integer(BinaryPrimitives.ReadInt64LittleEndian(source)),
+                SqlType.Decimal => DecodeDecimal(source),
+                SqlType.Float => SqlValue.Float(BinaryPrimitives.ReadDoubleLittleEndian(source)),
+                SqlType.Date => SqlValue.Date(DateOnly.FromDayNumber(BinaryPrimitives.ReadInt32LittleEndian(source))),
+                SqlType.Time => SqlValue.Time(new TimeOnly(BinaryPrimitives.ReadInt64LittleEndian(source))),
+                SqlType.DateTime => SqlValue.DateTime(new System.DateTime(BinaryPrimitives.ReadInt64LittleEndian(source), DateTimeKind.Unspecified)),
+                SqlType.DateTimeOffset => DecodeDateTimeOffset(source),
+                SqlType.UniqueIdentifier => SqlValue.UniqueIdentifier(new Guid(source[..16], bigEndian: true)),
+                _ => throw new StorageFormatException("Unknown fixed-width SQL column type.")
+            };
+        }
+        catch (StorageFormatException) { throw; }
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
+        {
+            throw new StorageFormatException($"Column '{column.Name}' contains an invalid {column.Type} value.", exception);
+        }
+    }
+
+    private static SqlValue DecodeDecimal(ReadOnlySpan<byte> source)
+    {
+        var bits = new int[4];
+        for (var index = 0; index < bits.Length; index++)
+            bits[index] = BinaryPrimitives.ReadInt32LittleEndian(source[(index * sizeof(int))..]);
+        return SqlValue.Decimal(new decimal(bits));
+    }
+
+    private static SqlValue DecodeDateTimeOffset(ReadOnlySpan<byte> source)
+    {
+        var utcTicks = BinaryPrimitives.ReadInt64LittleEndian(source);
+        var offset = TimeSpan.FromMinutes(BinaryPrimitives.ReadInt16LittleEndian(source[8..]));
+        var localTicks = checked(utcTicks + offset.Ticks);
+        return SqlValue.DateTimeOffset(new System.DateTimeOffset(localTicks, offset));
+    }
 
     internal static uint CalculateSchemaHash(TableDefinition table)
     {

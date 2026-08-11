@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Text;
 using sql_storage_engine.Overflow;
 using sql_storage_engine.Storage;
@@ -68,18 +67,8 @@ public sealed class OverflowRowCodec
                 if (!column.IsNullable) throw new StorageFormatException($"Non-nullable column '{column.Name}' is encoded as NULL.");
                 values[index] = SqlValue.Null;
             }
-            else if (column.Type == SqlType.Boolean)
-            {
-                values[index] = source.Span[fixedOffset] switch
-                {
-                    0 => SqlValue.Boolean(false), 1 => SqlValue.Boolean(true),
-                    _ => throw new StorageFormatException($"Invalid boolean byte for column '{column.Name}'.")
-                };
-            }
-            else if (column.Type == SqlType.Integer)
-            {
-                values[index] = SqlValue.Integer(BinaryPrimitives.ReadInt64LittleEndian(source.Span[fixedOffset..]));
-            }
+            else if (!RowCodec.IsVariable(column.Type))
+                values[index] = RowCodec.DecodeFixedValue(source.Span[fixedOffset..], column);
             else
             {
                 var entry = variables[index];

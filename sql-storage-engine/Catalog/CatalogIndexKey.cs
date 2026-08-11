@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Numerics;
 using sql_storage_engine.Indexes;
 using sql_storage_engine.Rows;
 
@@ -58,6 +59,17 @@ public static class CatalogIndexKey
                         break;
                     case TextSqlValue text: WriteLengthBytes(segment, RowCodec.Utf8.GetBytes(text.Value)); break;
                     case BinarySqlValue binary: WriteLengthBytes(segment, binary.Value.Span); break;
+                    case DecimalSqlValue exact: WriteDecimal(segment, exact.Value); break;
+                    case FloatSqlValue approximate: WriteSortableDouble(segment, approximate.Value); break;
+                    case DateSqlValue date: WriteSortableInt64(segment, date.Value.DayNumber); break;
+                    case TimeSqlValue time: WriteSortableInt64(segment, time.Value.Ticks); break;
+                    case DateTimeSqlValue dateTime: WriteSortableInt64(segment, dateTime.Value.Ticks); break;
+                    case DateTimeOffsetSqlValue dateTimeOffset: WriteSortableInt64(segment, dateTimeOffset.Value.UtcTicks); break;
+                    case UniqueIdentifierSqlValue identifier:
+                        var identifierBytes = new byte[16];
+                        identifier.Value.TryWriteBytes(identifierBytes, bigEndian: true, out _);
+                        Write(segment, identifierBytes);
+                        break;
                     default: throw new ArgumentException("Unsupported indexed SQL value.", nameof(values));
                 }
             }
@@ -79,6 +91,41 @@ public static class CatalogIndexKey
         Span<byte> length = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32BigEndian(length, checked((uint)bytes.Length));
         Write(output, length);
+        Write(output, bytes);
+    }
+
+    private static void WriteSortableInt64(IBufferWriter<byte> output, long value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt64BigEndian(bytes, unchecked((ulong)value) ^ 0x8000000000000000UL);
+        Write(output, bytes);
+    }
+
+    private static void WriteSortableDouble(IBufferWriter<byte> output, double value)
+    {
+        var bits = BitConverter.DoubleToUInt64Bits(value);
+        bits = (bits & 0x8000000000000000UL) != 0 ? ~bits : bits ^ 0x8000000000000000UL;
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt64BigEndian(bytes, bits);
+        Write(output, bytes);
+    }
+
+    private static void WriteDecimal(IBufferWriter<byte> output, decimal value)
+    {
+        var bits = decimal.GetBits(value);
+        var coefficient = ((BigInteger)(uint)bits[2] << 64) |
+                          ((BigInteger)(uint)bits[1] << 32) | (uint)bits[0];
+        var scale = (bits[3] >> 16) & 0xFF;
+        var magnitude = coefficient * BigInteger.Pow(10, 28 - scale);
+        Span<byte> bytes = stackalloc byte[25];
+        bytes.Clear();
+        var negative = (bits[3] & int.MinValue) != 0 && !coefficient.IsZero;
+        bytes[0] = negative ? (byte)0x7F : (byte)0x80;
+        var magnitudeLength = magnitude.GetByteCount(isUnsigned: true);
+        if (!magnitude.TryWriteBytes(bytes[(bytes.Length - magnitudeLength)..], out _, isUnsigned: true, isBigEndian: true))
+            throw new InvalidOperationException("SQL decimal did not fit its canonical index representation.");
+        if (negative)
+            for (var index = 1; index < bytes.Length; index++) bytes[index] ^= 0xFF;
         Write(output, bytes);
     }
     private static void WriteByte(IBufferWriter<byte> output, byte value) { var span = output.GetSpan(1); span[0] = value; output.Advance(1); }

@@ -28,9 +28,9 @@ public sealed class SqlModelTests
     }
 
     [Test]
-    public void RuntimeConversion_RejectsUnsupportedRepresentationsBeforeEncoding()
+    public void RuntimeConversion_AcceptsSupportedRepresentationsAndRejectsUnknownOnes()
     {
-        ((Func<SqlValue>)(() => SqlValue.From(12.5))).Should().Throw<ArgumentException>();
+        SqlValue.From(12.5).Should().Be(SqlValue.Float(12.5));
         ((Func<SqlValue>)(() => SqlValue.From(42))).Should().Throw<ArgumentException>();
         SqlValue.From(42L).Should().Be(SqlValue.Integer(42));
     }
