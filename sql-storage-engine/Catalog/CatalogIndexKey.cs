@@ -9,6 +9,7 @@ using System.Xml.Linq;
 using System.Xml.XPath;
 using sql_storage_engine.Indexes;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Catalog;
 
@@ -125,26 +126,80 @@ public static class CatalogIndexKey
         return row.Values[position];
     }
 
+    /// <summary>Encodes declared INCLUDE columns into a leaf payload, avoiding a heap fetch for covered projections.</summary>
+    public static byte[] EncodeIncludedValues(Row row, CatalogTable table, CatalogIndex index)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(index);
+        if (index.IncludedColumns.Count == 0) return [];
+        if (row.Values.Count != table.Columns.Count)
+            throw new ArgumentException("Row width does not match the table definition.", nameof(row));
+        var columns = IncludedColumns(table, index);
+        var positions = columns.Select(column => table.Columns.Select((candidate, position) => (candidate, position))
+            .Single(item => item.candidate.Id == column.Id).position).ToArray();
+        var schema = new TableDefinition(columns.Select(column => new ColumnDefinition(
+            column.Id, column.Name, column.Type, column.IsNullable, column.Encryption,
+            column.IsSparse, column.IsColumnSet)));
+        var encoded = RowCodec.Encode(new Row(positions.Select(position => row.Values[position])), schema);
+        if (encoded.Length > ushort.MaxValue)
+            throw new StorageResourceExhaustedException("Covered index payload exceeds 65,535 bytes.");
+        return encoded;
+    }
+
+    public static IReadOnlyDictionary<ColumnId, SqlValue> DecodeIncludedValues(ReadOnlySpan<byte> payload,
+        CatalogTable table, CatalogIndex index)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(index);
+        if (index.IncludedColumns.Count == 0)
+        {
+            if (!payload.IsEmpty) throw new StorageFormatException("Index without INCLUDE columns has a covered payload.");
+            return new Dictionary<ColumnId, SqlValue>();
+        }
+        if (payload.IsEmpty) throw new StorageCorruptionException("Covered index entry has no included payload.");
+        var columns = IncludedColumns(table, index);
+        var schema = new TableDefinition(columns.Select(column => new ColumnDefinition(
+            column.Id, column.Name, column.Type, column.IsNullable, column.Encryption,
+            column.IsSparse, column.IsColumnSet)));
+        var row = RowCodec.Decode(payload, schema);
+        return columns.Select((column, position) => (column.Id, Value: row.Values[position]))
+            .ToDictionary(item => item.Id, item => item.Value);
+    }
+
+    private static IReadOnlyList<CatalogColumn> IncludedColumns(CatalogTable table, CatalogIndex index)
+    {
+        table.ValidateFor(index);
+        return index.IncludedColumns.Select(id => table.Columns.Single(column => column.Id == id)).ToArray();
+    }
+
     /// <summary>Encodes values in index-column order for exact lookup and bounded index scans.</summary>
     public static IndexKey EncodeValues(IReadOnlyList<SqlValue> values, CatalogTable table, CatalogIndex index)
-        => EncodeValuesCore(values, table, index, null);
+        => EncodeValuesCore(values, table, index, null, allowPrefix: false);
+
+    /// <summary>Encodes a non-empty leading subset of a composite B-tree key.</summary>
+    public static IndexKey EncodePrefix(IReadOnlyList<SqlValue> values, CatalogTable table, CatalogIndex index)
+        => EncodeValuesCore(values, table, index, null, allowPrefix: true);
 
     internal static IndexKey EncodeValues(IReadOnlyList<SqlValue> values, CatalogTable table, CatalogIndex index,
-        int maximumKeyBytes) => EncodeValuesCore(values, table, index, maximumKeyBytes);
+        int maximumKeyBytes) => EncodeValuesCore(values, table, index, maximumKeyBytes, allowPrefix: false);
 
     private static IndexKey EncodeValuesCore(IReadOnlyList<SqlValue> values, CatalogTable table, CatalogIndex index,
-        int? maximumKeyBytesOverride)
+        int? maximumKeyBytesOverride, bool allowPrefix)
     {
         ArgumentNullException.ThrowIfNull(values);
         ArgumentNullException.ThrowIfNull(table);
         ArgumentNullException.ThrowIfNull(index);
         table.ValidateFor(index);
-        if (values.Count != index.Columns.Count)
+        if ((!allowPrefix && values.Count != index.Columns.Count) ||
+            (allowPrefix && (values.Count == 0 || values.Count > index.Columns.Count)))
             throw new ArgumentException($"Expected {index.Columns.Count} index values, received {values.Count}.", nameof(values));
+        if (allowPrefix && index.Method != CatalogIndexMethod.BTree)
+            throw new ArgumentException("Prefix bounds apply only to B-tree indexes.", nameof(index));
         if (index.Method != CatalogIndexMethod.BTree) return EncodeSpecialized(values.Single(), table, index);
         var output = new ArrayBufferWriter<byte>();
         var logicalKeyBytes = 0;
-        for (var indexOffset = 0; indexOffset < index.Columns.Count; indexOffset++)
+        for (var indexOffset = 0; indexOffset < values.Count; indexOffset++)
         {
             var indexed = index.Columns[indexOffset];
             var column = table.Columns.Single(candidate => candidate.Id == indexed.ColumnId);

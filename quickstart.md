@@ -118,8 +118,9 @@ path/value seeks in addition to whole-value lookup. The full coverage and normal
 
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are
-flushed before they return. Explicit multi-statement transactions are not yet part of this high-level contract;
-do not build against the lower-level transaction classes as a substitute.
+flushed before they return. Use `ExecuteStatementAsync` when several row mutations must commit as one crash-atomic
+statement; the callback opens statement-scoped tables and all of its changes are published once or restored together.
+The lower-level transaction classes remain implementation primitives rather than the executor contract.
 
 Use `TryInsertAsync` when an index declares `IGNORE_DUP_KEY`; its `TableInsertResult` represents either the new `RowId`
 or a skipped row and warning. Existing `InsertAsync` remains a strict wrapper. Query executors can request dynamic-data-

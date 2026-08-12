@@ -19,6 +19,7 @@ public sealed class FilePageStore : IPageStore
     }
 
     public int PageSize { get; }
+    internal string Path => _path;
 
     public static FilePageStore OpenExisting(string path, int pageSize, bool readOnly = false)
     {

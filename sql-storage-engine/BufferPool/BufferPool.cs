@@ -147,6 +147,23 @@ public sealed class BufferPool : IAsyncDisposable
         finally { _gate.Release(); }
     }
 
+    /// <summary>Discards every unpinned frame without flushing, used after durable statement rollback.</summary>
+    internal async ValueTask DiscardAllAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_frames.Values.Any(frame => !frame.IsEvictable))
+                throw new StorageResourceException("Cannot discard the buffer pool while pages are pinned.",
+                    new InvalidOperationException());
+            _frames.Clear();
+            _clock.Clear();
+            _clockHand = 0;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;

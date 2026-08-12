@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 6;
-    public const uint Magic = 0x36544143; // "CAT6" in persisted little-endian byte order.
+    public const ushort FormatVersion = 7;
+    public const uint Magic = 0x37544143; // "CAT7" in persisted little-endian byte order.
+    private const uint Version6Magic = 0x36544143;
     public const int HeaderLength = 32;
     public const int MaximumRecordCount = 65_535;
     public const int MaximumStringBytes = int.MaxValue;
@@ -58,6 +59,8 @@ public static class CatalogCodec
         foreach (var table in catalog.Tables)
         {
             WriteUInt64(output, table.Id.Value);
+            WriteString(output, table.DatabaseName);
+            WriteString(output, table.SchemaName);
             WriteString(output, table.Name);
             WriteUInt64(output, table.SchemaVersion);
             WriteUInt64(output, table.FirstHeapPageId.Value);
@@ -135,9 +138,12 @@ public static class CatalogCodec
     public static CatalogDefinition Decode(ReadOnlySpan<byte> source)
     {
         var reader = new Reader(source);
-        if (reader.UInt32() != Magic) throw new StorageFormatException("Invalid bootstrap catalog magic number.");
+        var magic = reader.UInt32();
+        if (magic is not (Magic or Version6Magic)) throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version != FormatVersion) throw new StorageFormatException($"Unsupported catalog format version {version}.");
+        if (version is not (6 or FormatVersion) || version == 6 && magic != Version6Magic ||
+            version == FormatVersion && magic != Magic)
+            throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();
         var indexCount = reader.Count();
@@ -169,6 +175,8 @@ public static class CatalogCodec
         for (var tableNumber = 0; tableNumber < tableCount; tableNumber++)
         {
             var id = new TableId(reader.UInt64());
+            var databaseName = version >= 7 ? reader.String() : "default";
+            var schemaName = version >= 7 ? reader.String() : "dbo";
             var name = reader.String();
             var schemaVersion = reader.UInt64();
             var heapRoot = new PageId(reader.UInt64());
@@ -182,7 +190,8 @@ public static class CatalogCodec
             for (var checkNumber = 0; checkNumber < checkCount; checkNumber++)
                 checks[checkNumber] = new CatalogCheckConstraint(reader.String(), reader.String());
             var nextIdentity = reader.Boolean() ? reader.BigInteger() : (BigInteger?)null;
-            try { tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity)); }
+            try { tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
+                databaseName, schemaName)); }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog table record.", exception); }
         }
         List<CatalogIndex> indexes = new(indexCount);

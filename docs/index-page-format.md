@@ -18,7 +18,17 @@ Each forward-growing 16-byte separator slot contains a four-byte key offset, two
 
 ## Leaf page
 
-The 72-byte leaf header stores nullable parent, previous, and next IDs at offsets 32, 41, and 50; entry count at 59; slot-directory end at 61; key-data start at 65; and three reserved zero bytes at 69. Each 24-byte slot stores key offset/length, two reserved bytes, row page ID, row slot ID, two reserved bytes, and row generation. Keys are contiguously packed backward and nondecreasing, allowing duplicate keys. Row page zero is invalid. Empty leaf pages are valid, including an empty tree root.
+The 72-byte leaf header stores nullable parent, previous, and next IDs at offsets 32, 41, and 50; entry count at 59;
+slot-directory end at 61; key-data start at 65; a payload-layout byte at 69; and two reserved zero bytes. Layout zero
+is the legacy key/row-ID form. Layout one uses each 24-byte slot's former reserved fields for a two-byte covered-payload
+length and two-byte payload offset. Key and payload bytes are contiguously packed backward. Payloads contain the row-codec
+projection of declared `INCLUDE` columns and are maintained on insert and update, allowing `FindEntriesAsync` and
+`ScanEntriesAsync` to return covered values without heap reads. Keys remain nondecreasing and may be duplicated. Row page
+zero is invalid. Empty leaf pages are valid, including an empty tree root.
+
+The high-level range API accepts absent lower or upper bounds and non-empty leading subsets of a composite key. Prefix
+bounds are translated to the half-open byte interval from the encoded prefix to its lexicographic successor; no sentinel
+SQL value is required.
 
 ## Deletion and page retirement
 

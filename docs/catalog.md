@@ -1,8 +1,11 @@
 # Catalog model
 
-The catalog owns stable numeric identities for tables, columns, and indexes. Object names are ordinally compared attributes; renaming an object does not change its identity or physical page references.
+The catalog owns stable numeric identities for tables, columns, and indexes. Ordinary table names carry database,
+schema, and object components and are compared ordinally as a tuple. Unqualified lookup succeeds only when exactly one
+table has that object name, so an executor cannot silently bind an ambiguous table. Renaming an object does not change
+its identity or physical page references.
 
-Each table record stores its `TableId`, name, schema version, first heap `PageId`, checks, durable identity allocation state, and ordered columns. Each column stores its `ColumnId`, name, complete SQL Server type declaration, nullability, defaults/identity/computed metadata, sparse/column-set/FILESTREAM flags, masking and Always Encrypted metadata, and generated-always/hidden facets. A type declaration retains its system type name and all applicable precision, scale, length/`max`, collation, vector, typed-XML, alias, and CLR-serialization facets. Each index stores its `IndexId`, owning `TableId`, root `PageId`, uniqueness, clustered/primary/duplicate-key options, included columns, and one or more ordered column references. Every indexed column specifies ascending or descending direction, NULL placement, and an optional collation override.
+Each table record stores its `TableId`, qualified name, schema version, first heap `PageId`, checks, durable identity allocation state, and ordered columns. Each column stores its `ColumnId`, name, complete SQL Server type declaration, nullability, defaults/identity/computed metadata, sparse/column-set/FILESTREAM flags, masking and Always Encrypted metadata, and generated-always/hidden facets. A type declaration retains its system type name and all applicable precision, scale, length/`max`, collation, vector, typed-XML, alias, and CLR-serialization facets. Each index stores its `IndexId`, owning `TableId`, root `PageId`, uniqueness, clustered/primary/duplicate-key options, included columns, and one or more ordered column references. Every indexed column specifies ascending or descending direction, NULL placement, and an optional collation override.
 
 Database-scoped records include XML schema collections, CLR assemblies, scalar alias/CLR types, and table types. XML collections are shared dependency targets rather than XSD documents duplicated in every column. CLR assembly records retain identity, permission set, optional image, and type bindings. Native CLR serialization omits `MaxByteSize`; user-defined serialization retains its finite or LOB limit. Table types retain defaults, identity, ROWGUIDCOL, computed/PERSISTED columns, checks, memory optimization, and complete clustered/nonclustered/hash index options.
 
@@ -10,7 +13,7 @@ Catalog validation is performed across the complete record set. Table IDs and na
 
 ## Bootstrap binary format
 
-Catalog format version 6 starts with the four bytes `43 41 54 36` (`CAT6`), a little-endian 16-bit version, two zero reserved bytes, and 32-bit table, index, scalar-type, table-type, XML-collection, and assembly counts. XML collections and assemblies precede table/index/type records so typed XML and CLR declarations resolve shared identities while decoding. Typed XML type records store only collection identity. Index records retain B-tree, JSON-path, namespace-bound XML, spatial, or vector method metadata.
+Catalog format version 7 starts with the four bytes `43 41 54 37` (`CAT7`), a little-endian 16-bit version, two zero reserved bytes, and 32-bit table, index, scalar-type, table-type, XML-collection, and assembly counts. XML collections and assemblies precede table/index/type records so typed XML and CLR declarations resolve shared identities while decoding. Table records encode database and schema before object name. Version 6 catalogs remain readable and assign their formerly unqualified tables to `[default].[dbo]`; the next catalog publication upgrades them to version 7. Typed XML type records store only collection identity. Index records retain B-tree, JSON-path, namespace-bound XML, spatial, or vector method metadata.
 
 Integers are explicitly little-endian; strings are strict UTF-8 prefixed by a 32-bit byte length. Counts are bounded to 65,535; total catalog size is bounded by the 65,536-page catalog traversal limit. Unknown versions or type names, invalid facets, malformed XML schemas, truncation, trailing bytes, and nonzero reserved bytes are rejected. Invalid relationships between otherwise well-formed records are reported as storage corruption. Earlier catalog versions are intentionally not decoded because no released database depends on them.
 
@@ -19,3 +22,8 @@ The encoded record stream is split across catalog pages. After the 32-byte commo
 Table creation validates names, schema versions, columns, and scoped uniqueness before allocating storage. It then creates the initial heap page and writes a replacement catalog chain. The in-memory name/ID cache and catalog root are published only after the heap and catalog pages flush successfully. A failed publication discards and frees the unpublished heap root. Reopening traverses the persisted catalog once and rebuilds the immutable lookup cache.
 
 Secondary-index creation validates the definition, allocates an empty leaf root, scans every live heap row, constructs each composite key from the catalog ordering configuration, and inserts the `(key, RowId)` pair. Unique-key violations or other build failures leave the index unpublished and raise an `IndexBuildException` containing all allocated and unreclaimed page IDs. Successful builds flush before publishing their final (possibly split) root in the catalog and can be reopened for lookup.
+
+`GetTableStatisticsAsync` and `GetIndexStatisticsAsync` return immutable, point-in-time optimizer snapshots. Table
+statistics contain exact row, heap-page, per-column NULL, and per-column distinct counts. B-tree index statistics contain
+entry/distinct-key/leaf-page counts and up to 200 equi-depth key histogram steps. Statistics are calculated on demand
+under the statement read gate in this release; they are not persisted and do not silently become stale catalog facts.

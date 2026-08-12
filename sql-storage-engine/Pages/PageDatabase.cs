@@ -3,6 +3,7 @@ using Microsoft.Win32.SafeHandles;
 using sql_storage_engine.Identifiers;
 using sql_storage_engine.Storage;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Transactions;
 
 namespace sql_storage_engine.Pages;
 
@@ -24,6 +25,7 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
     }
 
     public int PageSize => _store.PageSize;
+    internal string DatabasePath => _store.Path;
     public DatabaseHeader Header => _header;
 
     /// <summary>Atomically publishes the root of the logical catalog in page zero.</summary>
@@ -123,6 +125,7 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
+        await StatementJournal.RecoverIfNeededAsync(fullPath, cancellationToken).ConfigureAwait(false);
         var pageSize = await ProbePageSizeAsync(fullPath, cancellationToken).ConfigureAwait(false);
         if (!Enum.IsDefined(openMode)) throw new ArgumentOutOfRangeException(nameof(openMode));
         var store = FilePageStore.OpenExisting(fullPath, pageSize, openMode == DatabaseOpenMode.ReadOnly);
@@ -153,6 +156,13 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
             : _store.WriteAsync(pageId, source, cancellationToken);
 
     public ValueTask FlushAsync(CancellationToken cancellationToken = default) => _store.FlushAsync(cancellationToken);
+
+    internal async ValueTask ReloadHeaderAsync(CancellationToken cancellationToken = default)
+    {
+        var page = new byte[PageSize];
+        await _store.ReadAsync(new PageId(0), page, cancellationToken).ConfigureAwait(false);
+        _header = DatabaseHeaderCodec.Read(page);
+    }
 
     public async ValueTask<PageId> AllocateAsync(PageType pageType, CancellationToken cancellationToken = default)
     {

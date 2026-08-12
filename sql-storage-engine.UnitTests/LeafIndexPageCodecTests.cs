@@ -14,7 +14,9 @@ public sealed class LeafIndexPageCodecTests
     {
         var model = new LeafIndexPage(new PageId(5), new PageId(2), new PageId(3), new PageId(8), new[]
         {
-            Entry(1, 10, 1, 2), Entry(1, 11, 2, 3), Entry(9, 12, 3, 4)
+            new LeafIndexEntry(new IndexKey(new byte[] { 1 }),
+                new RowId(new PageId(10), new SlotId(1), new SlotGeneration(2)), new byte[] { 4, 5, 6 }),
+            Entry(1, 11, 2, 3), Entry(9, 12, 3, 4)
         });
         var page = new byte[PageConstants.DefaultSize];
         LeafIndexPageCodec.Write(page, model);

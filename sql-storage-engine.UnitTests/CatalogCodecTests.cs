@@ -28,7 +28,7 @@ public sealed class CatalogCodecTests
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
         Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
-            .Should().Be("gOz2+uZYX479Mc6+adxqge+zikwnG3/wbPBtQDRZWno=");
+            .Should().Be("AyWCqQiaHcNXsFzgyi/atlk1+ZdVJlkqfzEAYYKjRjQ=");
     }
 
     [Test]

@@ -9,6 +9,90 @@ namespace sql_storage_engine;
 public sealed record StoredRow(RowId RowId, Row Row);
 public sealed record SpecializedIndexMatch(RowId RowId, double Distance);
 
+/// <summary>A complete or leading composite-key bound for an index scan.</summary>
+public sealed record StorageIndexBound
+{
+    private readonly SqlValue[] _values;
+    public StorageIndexBound(IEnumerable<SqlValue> values, bool inclusive = true)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        _values = values.ToArray();
+        if (_values.Any(value => value is null))
+            throw new ArgumentException("Index bounds cannot contain null CLR references.", nameof(values));
+        Inclusive = inclusive;
+    }
+    public IReadOnlyList<SqlValue> Values => Array.AsReadOnly(_values);
+    public bool Inclusive { get; }
+}
+
+/// <summary>An index range with independently optional lower/upper bounds.</summary>
+public sealed record StorageIndexRange(StorageIndexBound? LowerBound = null, StorageIndexBound? UpperBound = null,
+    ScanDirection Direction = ScanDirection.Ascending);
+
+/// <summary>Exact cardinality metadata captured from a validated storage snapshot.</summary>
+public sealed record StorageColumnStatistics(ColumnId ColumnId, long NullCount, long DistinctValueCount);
+public sealed record StorageTableStatistics
+{
+    private readonly StorageColumnStatistics[] _columns;
+    public StorageTableStatistics(TableId tableId, long rowCount, int heapPageCount,
+        IEnumerable<StorageColumnStatistics> columns, DateTimeOffset capturedAt)
+    {
+        ArgumentNullException.ThrowIfNull(columns);
+        TableId = tableId; RowCount = rowCount; HeapPageCount = heapPageCount;
+        _columns = columns.ToArray(); CapturedAt = capturedAt;
+    }
+    public TableId TableId { get; }
+    public long RowCount { get; }
+    public int HeapPageCount { get; }
+    public IReadOnlyList<StorageColumnStatistics> Columns => Array.AsReadOnly(_columns);
+    public DateTimeOffset CapturedAt { get; }
+}
+public sealed record StorageHistogramBucket
+{
+    private readonly SqlValue[] _upperBound;
+    public StorageHistogramBucket(IEnumerable<SqlValue> upperBound, long rangeRows, long equalRows,
+        long distinctRangeValues)
+    {
+        ArgumentNullException.ThrowIfNull(upperBound);
+        _upperBound = upperBound.ToArray();
+        RangeRows = rangeRows; EqualRows = equalRows; DistinctRangeValues = distinctRangeValues;
+    }
+    public IReadOnlyList<SqlValue> UpperBound => Array.AsReadOnly(_upperBound);
+    public long RangeRows { get; }
+    public long EqualRows { get; }
+    public long DistinctRangeValues { get; }
+}
+public sealed record StorageIndexStatistics
+{
+    private readonly StorageHistogramBucket[] _histogram;
+    public StorageIndexStatistics(IndexId indexId, long entryCount, long distinctKeyCount, int leafPageCount,
+        IEnumerable<StorageHistogramBucket> histogram, DateTimeOffset capturedAt)
+    {
+        ArgumentNullException.ThrowIfNull(histogram);
+        IndexId = indexId; EntryCount = entryCount; DistinctKeyCount = distinctKeyCount;
+        LeafPageCount = leafPageCount; _histogram = histogram.ToArray(); CapturedAt = capturedAt;
+    }
+    public IndexId IndexId { get; }
+    public long EntryCount { get; }
+    public long DistinctKeyCount { get; }
+    public int LeafPageCount { get; }
+    public IReadOnlyList<StorageHistogramBucket> Histogram => Array.AsReadOnly(_histogram);
+    public DateTimeOffset CapturedAt { get; }
+}
+public sealed record StorageIndexEntry
+{
+    private readonly IReadOnlyDictionary<ColumnId, SqlValue> _includedValues;
+    public StorageIndexEntry(RowId rowId, IReadOnlyDictionary<ColumnId, SqlValue> includedValues)
+    {
+        ArgumentNullException.ThrowIfNull(includedValues);
+        RowId = rowId;
+        _includedValues = new System.Collections.ObjectModel.ReadOnlyDictionary<ColumnId, SqlValue>(
+            new Dictionary<ColumnId, SqlValue>(includedValues));
+    }
+    public RowId RowId { get; }
+    public IReadOnlyDictionary<ColumnId, SqlValue> IncludedValues => _includedValues;
+}
+
 /// <summary>Options controlling the storage engine's bounded in-memory resources.</summary>
 public sealed record StorageEngineOptions
 {
@@ -47,6 +131,7 @@ public interface IStorageCatalog
     IReadOnlyList<CatalogAssembly> Assemblies { get; }
     string DefaultCollation { get; }
     bool TryGetTable(string name, out CatalogTable? table);
+    bool TryGetTable(CatalogTableName name, out CatalogTable? table);
     bool TryGetTable(TableId id, out CatalogTable? table);
     bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index);
     IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId);
@@ -73,15 +158,27 @@ public interface IStorageTable
     ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default);
 }
 
+/// <summary>A statement-scoped view whose mutations commit or roll back as one durable unit.</summary>
+public interface IStorageStatement
+{
+    ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
+}
+
 /// <summary>Logical secondary-index access using typed values in the index's declared column order.</summary>
 public interface IStorageIndex
 {
     CatalogIndex Definition { get; }
     ValueTask<IReadOnlyList<RowId>> FindAsync(IReadOnlyList<SqlValue> values,
         CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<StorageIndexEntry>> FindEntriesAsync(IReadOnlyList<SqlValue> values,
+        CancellationToken cancellationToken = default);
     IAsyncEnumerable<RowId> ScanAsync(IReadOnlyList<SqlValue> lowerBound,
         IReadOnlyList<SqlValue> upperBound, bool includeLowerBound = true, bool includeUpperBound = true,
         ScanDirection direction = ScanDirection.Ascending, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<RowId> ScanAsync(StorageIndexRange range,
+        CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StorageIndexEntry> ScanEntriesAsync(StorageIndexRange range,
+        CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<SpecializedIndexMatch>> SearchNearestAsync(SqlValue query, int count,
         CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<RowId>> FindJsonPathAsync(string path, SqlValue value,
@@ -100,6 +197,9 @@ public interface IStorageEngine : IAsyncDisposable
         CancellationToken cancellationToken = default);
     ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         IEnumerable<CatalogCheckConstraint> checkConstraints, CancellationToken cancellationToken = default);
+    ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name, IEnumerable<CatalogColumn> columns,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default);
     ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,
         IEnumerable<CatalogIndexedColumn> columns, CancellationToken cancellationToken = default);
     ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,
@@ -125,5 +225,11 @@ public interface IStorageEngine : IAsyncDisposable
     ValueTask DropAssemblyAsync(string name, CancellationToken cancellationToken = default);
     ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
     ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId, CancellationToken cancellationToken = default);
+    ValueTask<StorageTableStatistics> GetTableStatisticsAsync(TableId tableId,
+        CancellationToken cancellationToken = default);
+    ValueTask<StorageIndexStatistics> GetIndexStatisticsAsync(IndexId indexId,
+        CancellationToken cancellationToken = default);
+    ValueTask ExecuteStatementAsync(Func<IStorageStatement, CancellationToken, ValueTask> operation,
+        CancellationToken cancellationToken = default);
     ValueTask FlushAsync(CancellationToken cancellationToken = default);
 }

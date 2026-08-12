@@ -34,8 +34,8 @@ public sealed class MutableIndexRootReference(PageId rootPageId) : IIndexRootRef
 }
 
 public readonly record struct IndexRange(
-    IndexKey LowerBound,
-    IndexKey UpperBound,
+    IndexKey? LowerBound,
+    IndexKey? UpperBound,
     bool IncludeLowerBound = true,
     bool IncludeUpperBound = true,
     ScanDirection Direction = ScanDirection.Ascending);
@@ -117,9 +117,15 @@ public sealed class PersistentBPlusTree
     /// <summary>Inserts into a leaf only when it already has capacity.</summary>
     public async ValueTask<IndexInsertResult> InsertWithoutSplitAsync(IndexKey key, RowId rowId,
         CancellationToken cancellationToken = default)
+        => await InsertWithoutSplitAsync(key, rowId, ReadOnlyMemory<byte>.Empty, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<IndexInsertResult> InsertWithoutSplitAsync(IndexKey key, RowId rowId,
+        ReadOnlyMemory<byte> includedPayload, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
         if (rowId.PageId.Value == 0) throw new ArgumentOutOfRangeException(nameof(rowId));
+        if (!LeafIndexPageCodec.CanFit(_bufferPool.PageSize, [new LeafIndexEntry(key, rowId, includedPayload)]))
+            throw new StorageResourceExhaustedException("Index key and covered payload do not fit on an empty leaf page.");
         // This preflight establishes logical behavior only; transactional race protection belongs to the locking layer.
         if (_isUnique && (await FindAsync(key, cancellationToken).ConfigureAwait(false)).Count != 0)
             throw new DuplicateIndexKeyException();
@@ -132,7 +138,7 @@ public sealed class PersistentBPlusTree
             var entries = leaf.Entries.ToList();
             var insertAt = 0;
             while (insertAt < entries.Count && entries[insertAt].Key.CompareTo(key) <= 0) insertAt++;
-            entries.Insert(insertAt, new LeafIndexEntry(key, rowId));
+            entries.Insert(insertAt, new LeafIndexEntry(key, rowId, includedPayload));
             if (!LeafIndexPageCodec.CanFit(_bufferPool.PageSize, entries)) return IndexInsertResult.SplitRequired;
             LeafIndexPageCodec.Write(pin.Memory.Span, leaf with { Entries = entries.AsReadOnly() });
             pin.MarkDirty(new LogSequenceNumber(0));
@@ -144,14 +150,18 @@ public sealed class PersistentBPlusTree
 
     /// <summary>Inserts an entry and splits a full leaf, including root-leaf growth.</summary>
     public async ValueTask InsertAsync(IndexKey key, RowId rowId, CancellationToken cancellationToken = default)
+        => await InsertAsync(key, rowId, ReadOnlyMemory<byte>.Empty, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask InsertAsync(IndexKey key, RowId rowId, ReadOnlyMemory<byte> includedPayload,
+        CancellationToken cancellationToken = default)
     {
-        if (await InsertWithoutSplitAsync(key, rowId, cancellationToken).ConfigureAwait(false) == IndexInsertResult.Inserted) return;
+        if (await InsertWithoutSplitAsync(key, rowId, includedPayload, cancellationToken).ConfigureAwait(false) == IndexInsertResult.Inserted) return;
         var leafId = await FindLeafAsync(key, equalRoutesLeft: false, cancellationToken).ConfigureAwait(false);
         var leaf = await ReadLeafAsync(leafId, cancellationToken).ConfigureAwait(false);
         var entries = leaf.Entries.ToList();
         var insertAt = 0;
         while (insertAt < entries.Count && entries[insertAt].Key.CompareTo(key) <= 0) insertAt++;
-        entries.Insert(insertAt, new LeafIndexEntry(key, rowId));
+        entries.Insert(insertAt, new LeafIndexEntry(key, rowId, includedPayload));
         var splitAt = entries.Count / 2;
         var leftEntries = entries[..splitAt];
         var rightEntries = entries[splitAt..];
@@ -178,10 +188,15 @@ public sealed class PersistentBPlusTree
 
     public async ValueTask<IReadOnlyList<RowId>> FindAsync(IndexKey key,
         CancellationToken cancellationToken = default)
+        => (await FindEntriesAsync(key, cancellationToken).ConfigureAwait(false))
+            .Select(entry => entry.RowId).ToArray();
+
+    public async ValueTask<IReadOnlyList<LeafIndexEntry>> FindEntriesAsync(IndexKey key,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
         PageId? leafId = await FindLeafAsync(key, equalRoutesLeft: true, cancellationToken).ConfigureAwait(false);
-        List<RowId> result = [];
+        List<LeafIndexEntry> result = [];
         HashSet<PageId> visited = [];
         for (var pages = 0; pages < MaximumScanPages && leafId is { } current; pages++)
         {
@@ -191,7 +206,7 @@ public sealed class PersistentBPlusTree
             foreach (var entry in leaf.Entries)
             {
                 var comparison = entry.Key.CompareTo(key);
-                if (comparison == 0) result.Add(entry.RowId);
+                if (comparison == 0) result.Add(entry);
                 if (comparison > 0) { sawGreater = true; break; }
             }
             if (sawGreater || leaf.Entries.Count > 0 && leaf.Entries[^1].Key.CompareTo(key) > 0) return result.AsReadOnly();
@@ -204,7 +219,8 @@ public sealed class PersistentBPlusTree
     public async IAsyncEnumerable<LeafIndexEntry> ScanAsync(IndexRange range,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (range.LowerBound.CompareTo(range.UpperBound) > 0) yield break;
+        if (range.LowerBound is not null && range.UpperBound is not null &&
+            range.LowerBound.CompareTo(range.UpperBound) > 0) yield break;
         var current = range.Direction == ScanDirection.Ascending
             ? await FindEdgeLeafAsync(leftmost: true, cancellationToken).ConfigureAwait(false)
             : await FindEdgeLeafAsync(leftmost: false, cancellationToken).ConfigureAwait(false);
@@ -220,14 +236,34 @@ public sealed class PersistentBPlusTree
             foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var lower = entry.Key.CompareTo(range.LowerBound);
-                var upper = entry.Key.CompareTo(range.UpperBound);
-                if ((lower > 0 || lower == 0 && range.IncludeLowerBound) &&
-                    (upper < 0 || upper == 0 && range.IncludeUpperBound)) yield return entry;
+                var aboveLower = range.LowerBound is null || entry.Key.CompareTo(range.LowerBound) is var lower &&
+                    (lower > 0 || lower == 0 && range.IncludeLowerBound);
+                var belowUpper = range.UpperBound is null || entry.Key.CompareTo(range.UpperBound) is var upper &&
+                    (upper < 0 || upper == 0 && range.IncludeUpperBound);
+                if (aboveLower && belowUpper) yield return entry;
             }
             current = range.Direction == ScanDirection.Ascending ? leaf.NextPageId : leaf.PreviousPageId;
         }
         if (current is not null) throw new StorageCorruptionException("Range scan exceeded the leaf traversal bound.");
+    }
+
+    /// <summary>Returns the validated leaf-chain page IDs for diagnostics and optimizer statistics.</summary>
+    public async ValueTask<IReadOnlyList<PageId>> GetLeafPageIdsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var current = await FindEdgeLeafAsync(leftmost: true, cancellationToken).ConfigureAwait(false);
+        List<PageId> pages = [];
+        HashSet<PageId> visited = [];
+        while (current is { } pageId)
+        {
+            if (pages.Count == MaximumScanPages)
+                throw new StorageResourceExhaustedException("Index leaf traversal limit exceeded.");
+            if (!visited.Add(pageId))
+                throw new StorageCorruptionException($"Cycle detected in leaf chain at {pageId}.");
+            pages.Add(pageId);
+            current = (await ReadLeafAsync(pageId, cancellationToken).ConfigureAwait(false)).NextPageId;
+        }
+        return pages.AsReadOnly();
     }
 
     internal async ValueTask<PageId> FindLeafAsync(IndexKey key, bool equalRoutesLeft,

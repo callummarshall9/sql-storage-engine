@@ -18,8 +18,9 @@ public sealed class TableIndex(CatalogIndex definition, PersistentBPlusTree tree
     public PersistentBPlusTree Tree { get; } = tree ?? throw new ArgumentNullException(nameof(tree));
     public int AddCount { get; private set; }
     public int RemoveCount { get; private set; }
-    internal async ValueTask AddAsync(IndexKey key, RowId rowId, CancellationToken token)
-    { await Tree.InsertAsync(key, rowId, token).ConfigureAwait(false); AddCount++; }
+    internal async ValueTask AddAsync(IndexKey key, RowId rowId, ReadOnlyMemory<byte> includedPayload,
+        CancellationToken token)
+    { await Tree.InsertAsync(key, rowId, includedPayload, token).ConfigureAwait(false); AddCount++; }
     internal async ValueTask<bool> RemoveAsync(IndexKey key, RowId rowId, CancellationToken token = default)
     { var removed = await Tree.RemoveAsync(key, rowId, token).ConfigureAwait(false); if (removed) RemoveCount++; return removed; }
 }
@@ -139,7 +140,9 @@ public sealed class TableStorage
             {
                 foreach (var key in CatalogIndexKey.EncodeEntries(storedRow, _table, index.Definition))
                 {
-                    await index.AddAsync(key, rowId.Value, cancellationToken).ConfigureAwait(false);
+                    await index.AddAsync(key, rowId.Value,
+                        CatalogIndexKey.EncodeIncludedValues(storedRow, _table, index.Definition),
+                        cancellationToken).ConfigureAwait(false);
                     insertedIndexes.Add((index, key));
                 }
             }
@@ -197,8 +200,8 @@ public sealed class TableStorage
             return new TableUpdateResult(false, rowId, rowId);
         }
 
-        List<(TableIndex Index, IndexKey Key)> removedEntries = [];
-        List<(TableIndex Index, IndexKey Key)> addedEntries = [];
+        List<(TableIndex Index, IndexKey Key, byte[] Payload)> removedEntries = [];
+        List<(TableIndex Index, IndexKey Key, byte[] Payload)> addedEntries = [];
         var indexes = CurrentIndexes();
         try
         {
@@ -206,18 +209,21 @@ public sealed class TableStorage
             {
                 var oldKeys = CatalogIndexKey.EncodeEntries(oldRow, _table, index.Definition).ToHashSet();
                 var newKeys = CatalogIndexKey.EncodeEntries(newRow, _table, index.Definition).ToHashSet();
-                var remove = relocated ? oldKeys : oldKeys.Except(newKeys);
-                var add = relocated ? newKeys : newKeys.Except(oldKeys);
+                var oldPayload = CatalogIndexKey.EncodeIncludedValues(oldRow, _table, index.Definition);
+                var newPayload = CatalogIndexKey.EncodeIncludedValues(newRow, _table, index.Definition);
+                var payloadChanged = !oldPayload.AsSpan().SequenceEqual(newPayload);
+                var remove = relocated || payloadChanged ? oldKeys : oldKeys.Except(newKeys);
+                var add = relocated || payloadChanged ? newKeys : newKeys.Except(oldKeys);
                 foreach (var key in remove)
                 {
                     if (!await index.RemoveAsync(key, rowId, cancellationToken).ConfigureAwait(false))
                         throw new StorageCorruptionException($"Index {index.Definition.Id} is missing the row being updated.");
-                    removedEntries.Add((index, key));
+                    removedEntries.Add((index, key, oldPayload));
                 }
                 foreach (var key in add)
                 {
-                    await index.AddAsync(key, newRowId, cancellationToken).ConfigureAwait(false);
-                    addedEntries.Add((index, key));
+                    await index.AddAsync(key, newRowId, newPayload, cancellationToken).ConfigureAwait(false);
+                    addedEntries.Add((index, key, newPayload));
                 }
             }
             if (relocated && !await _heap.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false))
@@ -237,7 +243,8 @@ public sealed class TableStorage
             for (var index = removedEntries.Count - 1; index >= 0; index--)
             {
                 try
-                { await removedEntries[index].Index.AddAsync(removedEntries[index].Key, rowId, CancellationToken.None).ConfigureAwait(false); }
+                { await removedEntries[index].Index.AddAsync(removedEntries[index].Key, rowId,
+                    removedEntries[index].Payload, CancellationToken.None).ConfigureAwait(false); }
                 catch (StorageException) { unreclaimed.Add(removedEntries[index].Index.Definition.RootPageId); }
             }
             try
@@ -485,7 +492,7 @@ public sealed class TableStorage
             return new TableDeleteResult(false, Array.Empty<PageId>());
         var row = await _rowCodec.DecodeAsync(current.Row, _schema, cancellationToken).ConfigureAwait(false);
         var overflowReferences = _rowCodec.GetOverflowReferences(current.Row.Span, _schema).Values.ToArray();
-        List<(TableIndex Index, IndexKey Key)> removed = [];
+        List<(TableIndex Index, IndexKey Key, byte[] Payload)> removed = [];
         var indexes = CurrentIndexes();
         try
         {
@@ -495,7 +502,7 @@ public sealed class TableStorage
                 {
                     if (!await index.RemoveAsync(key, rowId, cancellationToken).ConfigureAwait(false))
                         throw new StorageCorruptionException($"Index {index.Definition.Id} is missing the row being deleted.");
-                    removed.Add((index, key));
+                    removed.Add((index, key, CatalogIndexKey.EncodeIncludedValues(row, _table, index.Definition)));
                 }
             }
             if (!await _heap.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false))
@@ -505,7 +512,8 @@ public sealed class TableStorage
         {
             List<PageId> unreclaimed = [];
             foreach (var mutation in removed.AsEnumerable().Reverse())
-                try { await mutation.Index.AddAsync(mutation.Key, rowId, CancellationToken.None).ConfigureAwait(false); }
+                try { await mutation.Index.AddAsync(mutation.Key, rowId, mutation.Payload,
+                    CancellationToken.None).ConfigureAwait(false); }
                 catch (StorageException) { unreclaimed.Add(mutation.Index.Definition.RootPageId); }
             throw new TableMutationException("Table deletion failed before the heap row was removed; index compensation was attempted.",
                 unreclaimed.Distinct().ToArray(), exception);

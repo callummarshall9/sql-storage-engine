@@ -32,6 +32,27 @@ public enum CatalogIndexMethod : byte { BTree = 1, Json = 2, Spatial = 3, Vector
 public enum SqlVectorDistanceMetric : byte { Cosine = 1, Euclidean = 2, DotProduct = 3 }
 public enum CatalogXmlIndexKind : byte { Primary = 1, Path = 2, Value = 3, Property = 4, Selective = 5 }
 
+/// <summary>A database/schema-qualified ordinary table name.</summary>
+public sealed record CatalogTableName
+{
+    public CatalogTableName(string databaseName, string schemaName, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databaseName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(schemaName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        DatabaseName = databaseName;
+        SchemaName = schemaName;
+        Name = name;
+    }
+
+    public string DatabaseName { get; }
+    public string SchemaName { get; }
+    public string Name { get; }
+    public string QualifiedName => $"[{DatabaseName}].[{SchemaName}].[{Name}]";
+
+    public override string ToString() => QualifiedName;
+}
+
 public sealed record CatalogBTreeIndexOptions
 {
     public CatalogBTreeIndexOptions(CatalogIndexStorageKind storageKind = CatalogIndexStorageKind.NonClustered,
@@ -385,9 +406,9 @@ public sealed record CatalogTable
 
     public CatalogTable(TableId id, string name, ulong schemaVersion, PageId firstHeapPageId,
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
-        BigInteger? nextIdentityValue = null)
+        BigInteger? nextIdentityValue = null, string databaseName = "default", string schemaName = "dbo")
     {
-        if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Table name cannot be empty.", nameof(name));
+        var qualifiedName = new CatalogTableName(databaseName, schemaName, name);
         if (schemaVersion == 0) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
         ArgumentNullException.ThrowIfNull(columns);
         _columns = columns.ToArray();
@@ -432,7 +453,9 @@ public sealed record CatalogTable
         if (identity is null && nextIdentityValue is not null)
             throw new ArgumentException("A table without IDENTITY cannot have identity allocation state.", nameof(nextIdentityValue));
         Id = id;
-        Name = name;
+        Name = qualifiedName.Name;
+        DatabaseName = qualifiedName.DatabaseName;
+        SchemaName = qualifiedName.SchemaName;
         SchemaVersion = schemaVersion;
         FirstHeapPageId = firstHeapPageId;
         NextIdentityValue = identity is null ? null : nextIdentityValue ?? identity.Seed;
@@ -440,6 +463,9 @@ public sealed record CatalogTable
 
     public TableId Id { get; }
     public string Name { get; }
+    public string DatabaseName { get; }
+    public string SchemaName { get; }
+    public CatalogTableName QualifiedName => new(DatabaseName, SchemaName, Name);
     public ulong SchemaVersion { get; }
     public PageId FirstHeapPageId { get; }
     public IReadOnlyList<CatalogColumn> Columns => Array.AsReadOnly(_columns);
@@ -841,7 +867,8 @@ public sealed class CatalogDefinition
             "XML schema collection names", nameof(xmlSchemaCollections));
         CatalogTable.ValidateUnique(_assemblies.Select(assembly => assembly.Name), "Assembly names", nameof(assemblies), StringComparer.Ordinal);
         CatalogTable.ValidateUnique(_tables.Select(table => table.Id), "Table IDs", nameof(tables));
-        CatalogTable.ValidateUnique(_tables.Select(table => table.Name), "Table names", nameof(tables), StringComparer.Ordinal);
+        CatalogTable.ValidateUnique(_tables.Select(table => (table.DatabaseName, table.SchemaName, table.Name)),
+            "Qualified table names", nameof(tables));
         CatalogTable.ValidateUnique(_indexes.Select(index => index.Id), "Index IDs", nameof(indexes));
         var typeNames = _scalarTypes.Select(type => (type.SchemaName, type.Name))
             .Concat(_tableTypes.Select(type => (type.SchemaName, type.Name))).ToArray();

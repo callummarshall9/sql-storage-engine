@@ -65,21 +65,30 @@ public sealed class CatalogService
     public async ValueTask<CatalogTable> CreateTableAsync(string name, ulong schemaVersion,
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints,
         CancellationToken cancellationToken = default)
+        => await CreateTableAsync(new CatalogTableName("default", "dbo", name), schemaVersion, columns,
+            checkConstraints, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name, ulong schemaVersion,
+        IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(columns);
         var columnSnapshot = columns.ToArray();
         var checkSnapshot = checkConstraints?.ToArray() ?? [];
-        if (_definition.Tables.Any(table => StringComparer.Ordinal.Equals(table.Name, name)))
-            throw new CatalogConflictException($"A table named '{name}' already exists.");
+        if (_definition.Tables.Any(table => table.QualifiedName == name))
+            throw new CatalogConflictException($"A table named {name.QualifiedName} already exists.");
         var nextId = new TableId(_definition.Tables.Count == 0
             ? 1UL
             : checked(_definition.Tables.Max(table => table.Id.Value) + 1));
         // Validate all caller-controlled schema state before allocating any page.
-        _ = new CatalogTable(nextId, name, schemaVersion, new PageId(1), columnSnapshot, checkSnapshot);
+        _ = new CatalogTable(nextId, name.Name, schemaVersion, new PageId(1), columnSnapshot, checkSnapshot,
+            databaseName: name.DatabaseName, schemaName: name.SchemaName);
 
         var heap = await TableHeap.CreateAsync(_bufferPool, _allocator, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
-        var table = new CatalogTable(nextId, name, schemaVersion, heap.RootPageId, columnSnapshot, checkSnapshot);
+        var table = new CatalogTable(nextId, name.Name, schemaVersion, heap.RootPageId, columnSnapshot, checkSnapshot,
+            databaseName: name.DatabaseName, schemaName: name.SchemaName);
         var candidate = new CatalogDefinition(_definition.Tables.Append(table), _definition.Indexes,
             _definition.ScalarTypes, _definition.TableTypes, _definition.XmlSchemaCollections, _definition.Assemblies);
         try
@@ -112,7 +121,7 @@ public sealed class CatalogService
                 SqlValue.Decimal(new SqlDecimal(current, 0)));
             var next = current + identityColumn.Identity!.Increment;
             var replacement = new CatalogTable(table.Id, table.Name, table.SchemaVersion, table.FirstHeapPageId,
-                table.Columns, table.CheckConstraints, next);
+                table.Columns, table.CheckConstraints, next, table.DatabaseName, table.SchemaName);
             var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
@@ -127,7 +136,16 @@ public sealed class CatalogService
     public bool TryOpenTable(string name, out CatalogTable? table)
     {
         if (name is null) throw new ArgumentNullException(nameof(name));
-        table = _definition.Tables.SingleOrDefault(candidate => StringComparer.Ordinal.Equals(candidate.Name, name));
+        var matches = _definition.Tables.Where(candidate => StringComparer.Ordinal.Equals(candidate.Name, name))
+            .Take(2).ToArray();
+        table = matches.Length == 1 ? matches[0] : null;
+        return table is not null;
+    }
+
+    public bool TryOpenTable(CatalogTableName name, out CatalogTable? table)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        table = _definition.Tables.SingleOrDefault(candidate => candidate.QualifiedName == name);
         return table is not null;
     }
 
@@ -204,7 +222,9 @@ public sealed class CatalogService
                 var provisional = new CatalogIndex(nextId, name, tableId, rootReference.RootPageId, isUnique, columnSnapshot, specializedOptions,
                     btreeOptions.StorageKind, btreeOptions.IsPrimaryKey, btreeOptions.IncludedColumns, btreeOptions.IgnoreDuplicateKey);
                 foreach (var key in CatalogIndexKey.EncodeEntries(row, table!, provisional))
-                    await tree.InsertAsync(key, entry.RowId, cancellationToken).ConfigureAwait(false);
+                    await tree.InsertAsync(key, entry.RowId,
+                        CatalogIndexKey.EncodeIncludedValues(row, table!, provisional),
+                        cancellationToken).ConfigureAwait(false);
             }
             if (vectorColumnPosition >= 0 && vectorValueCount < 100)
                 throw new InvalidOperationException("A vector index requires at least 100 non-NULL vectors when it is created.");
@@ -431,7 +451,8 @@ public sealed class CatalogService
                 column.GeneratedAlways, column.IsHidden);
         }
         var tables = _definition.Tables.Select(table => new CatalogTable(table.Id, table.Name, table.SchemaVersion,
-            table.FirstHeapPageId, table.Columns.Select(RebindColumn), table.CheckConstraints, table.NextIdentityValue));
+            table.FirstHeapPageId, table.Columns.Select(RebindColumn), table.CheckConstraints, table.NextIdentityValue,
+            table.DatabaseName, table.SchemaName));
         var tableTypes = _definition.TableTypes.Select(type => new CatalogTableType(type.SchemaName, type.Name,
             type.Columns.Select(RebindColumn), type.Indexes, type.CheckConstraints, type.IsMemoryOptimized));
         return new CatalogDefinition(tables, _definition.Indexes, _definition.ScalarTypes, tableTypes,
