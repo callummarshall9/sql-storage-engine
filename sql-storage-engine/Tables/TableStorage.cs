@@ -140,6 +140,14 @@ public sealed class TableStorage
     {
         ArgumentNullException.ThrowIfNull(row);
         row = await PrepareInsertAsync(row, cancellationToken).ConfigureAwait(false);
+        return await InsertPreparedAsync(row, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Persists an already materialized row without regenerating identity, rowversion, or period values.</summary>
+    internal async ValueTask<TableInsertResult> InsertPreparedAsync(Row row,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(row);
         _schema.ValidateRow(row); // No allocation or mutation occurs before complete logical validation.
         RowEncodingResult encoded = await _rowCodec.EncodeAsync(row, _schema, cancellationToken).ConfigureAwait(false);
         RowId? rowId = null;
@@ -208,13 +216,21 @@ public sealed class TableStorage
     /// <summary>Applies selected columns while maintaining changed keys and all RowId references after relocation.</summary>
     public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
         CancellationToken cancellationToken = default)
+        => await UpdateCoreAsync(rowId, update, null, cancellationToken).ConfigureAwait(false);
+
+    internal async ValueTask<TableUpdateResult> UpdateSystemVersionedAsync(RowId rowId, RowUpdate update,
+        SqlValue periodStart, CancellationToken cancellationToken = default)
+        => await UpdateCoreAsync(rowId, update, periodStart, cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<TableUpdateResult> UpdateCoreAsync(RowId rowId, RowUpdate update,
+        SqlValue? periodStart, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(update);
         var current = await _heap.ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
         if (current.Result != TableHeapLookupResult.Found) return new TableUpdateResult(false, rowId, rowId);
         var oldBytes = current.Row.ToArray();
         var oldRow = await _rowCodec.DecodeAsync(current.Row, _schema, cancellationToken).ConfigureAwait(false);
-        update = await PrepareUpdateAsync(oldRow, update, cancellationToken).ConfigureAwait(false);
+        update = await PrepareUpdateAsync(oldRow, update, periodStart, cancellationToken).ConfigureAwait(false);
         var replacement = await _rowCodec.ApplyUpdateAsync(current.Row, update, _schema, cancellationToken).ConfigureAwait(false);
         var newRow = await _rowCodec.DecodeAsync(replacement.Bytes, _schema, cancellationToken).ConfigureAwait(false);
         var heapResult = await _heap.UpdateAsync(rowId, replacement.Bytes, cancellationToken).ConfigureAwait(false);
@@ -344,7 +360,8 @@ public sealed class TableStorage
         var result = new Row(values); _schema.ValidateRow(result); ValidateChecks(result); return result;
     }
 
-    private async ValueTask<RowUpdate> PrepareUpdateAsync(Row oldRow, RowUpdate update, CancellationToken cancellationToken)
+    private async ValueTask<RowUpdate> PrepareUpdateAsync(Row oldRow, RowUpdate update, SqlValue? periodStart,
+        CancellationToken cancellationToken)
     {
         if (update.Columns.Select(column => column.ColumnIndex).Distinct().Count() != update.Columns.Count)
             throw new ArgumentException("Updated column indexes must be unique.", nameof(update));
@@ -389,8 +406,10 @@ public sealed class TableStorage
         {
             var column = _table.Columns[position];
             if (column.GeneratedAlways is CatalogGeneratedAlwaysKind.None or CatalogGeneratedAlwaysKind.RowEnd) continue;
-            values[position] = SqlConversion.ConvertTo(column.Type,
-                await RequireGeneratedValueGenerator()(column.GeneratedAlways, cancellationToken).ConfigureAwait(false));
+            values[position] = column.GeneratedAlways == CatalogGeneratedAlwaysKind.RowStart && periodStart is not null
+                ? SqlConversion.ConvertTo(column.Type, periodStart)
+                : SqlConversion.ConvertTo(column.Type,
+                    await RequireGeneratedValueGenerator()(column.GeneratedAlways, cancellationToken).ConfigureAwait(false));
             context[column.Name] = values[position];
         }
         ComputeColumns(values, context); ClearColumnSet(values, context);

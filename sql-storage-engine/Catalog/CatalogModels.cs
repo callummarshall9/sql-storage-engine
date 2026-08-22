@@ -210,6 +210,25 @@ public enum CatalogGeneratedAlwaysKind : byte
 { None = 0, RowStart = 1, RowEnd = 2, TransactionIdStart = 3, TransactionIdEnd = 4, SequenceNumberStart = 5, SequenceNumberEnd = 6 }
 public enum CatalogEncryptionType : byte { Deterministic = 1, Randomized = 2 }
 
+/// <summary>
+/// Identifies the durable history table and the two UTC datetime2 period columns for a system-versioned table.
+/// </summary>
+public sealed record CatalogSystemVersioning
+{
+    public CatalogSystemVersioning(TableId historyTableId, ColumnId periodStartColumnId, ColumnId periodEndColumnId)
+    {
+        if (periodStartColumnId == periodEndColumnId)
+            throw new ArgumentException("The temporal period start and end columns must be different.");
+        HistoryTableId = historyTableId;
+        PeriodStartColumnId = periodStartColumnId;
+        PeriodEndColumnId = periodEndColumnId;
+    }
+
+    public TableId HistoryTableId { get; }
+    public ColumnId PeriodStartColumnId { get; }
+    public ColumnId PeriodEndColumnId { get; }
+}
+
 public sealed record CatalogColumnEncryption
 {
     public CatalogColumnEncryption(string keyName, CatalogEncryptionType encryptionType,
@@ -406,7 +425,8 @@ public sealed record CatalogTable
 
     public CatalogTable(TableId id, string name, ulong schemaVersion, PageId firstHeapPageId,
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
-        BigInteger? nextIdentityValue = null, string databaseName = "default", string schemaName = "dbo")
+        BigInteger? nextIdentityValue = null, string databaseName = "default", string schemaName = "dbo",
+        CatalogSystemVersioning? systemVersioning = null)
     {
         var qualifiedName = new CatalogTableName(databaseName, schemaName, name);
         if (schemaVersion == 0) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
@@ -452,6 +472,20 @@ public sealed record CatalogTable
         var identity = _columns.SingleOrDefault(column => column.Identity is not null)?.Identity;
         if (identity is null && nextIdentityValue is not null)
             throw new ArgumentException("A table without IDENTITY cannot have identity allocation state.", nameof(nextIdentityValue));
+        if (systemVersioning is not null)
+        {
+            var start = _columns.SingleOrDefault(column => column.Id == systemVersioning.PeriodStartColumnId)
+                ?? throw new ArgumentException("The temporal period start column does not belong to the table.", nameof(systemVersioning));
+            var end = _columns.SingleOrDefault(column => column.Id == systemVersioning.PeriodEndColumnId)
+                ?? throw new ArgumentException("The temporal period end column does not belong to the table.", nameof(systemVersioning));
+            if (start.GeneratedAlways != CatalogGeneratedAlwaysKind.RowStart ||
+                end.GeneratedAlways != CatalogGeneratedAlwaysKind.RowEnd ||
+                start.Type.Name != SqlTypeName.DateTime2 || end.Type.Name != SqlTypeName.DateTime2 || start.Type != end.Type ||
+                start.IsNullable || end.IsNullable)
+                throw new ArgumentException(
+                    "A temporal period requires non-null datetime2 columns generated always as ROW START and ROW END.",
+                    nameof(systemVersioning));
+        }
         Id = id;
         Name = qualifiedName.Name;
         DatabaseName = qualifiedName.DatabaseName;
@@ -459,6 +493,7 @@ public sealed record CatalogTable
         SchemaVersion = schemaVersion;
         FirstHeapPageId = firstHeapPageId;
         NextIdentityValue = identity is null ? null : nextIdentityValue ?? identity.Seed;
+        SystemVersioning = systemVersioning;
     }
 
     public TableId Id { get; }
@@ -471,6 +506,7 @@ public sealed record CatalogTable
     public IReadOnlyList<CatalogColumn> Columns => Array.AsReadOnly(_columns);
     public IReadOnlyList<CatalogCheckConstraint> CheckConstraints => Array.AsReadOnly(_checkConstraints);
     public BigInteger? NextIdentityValue { get; }
+    public CatalogSystemVersioning? SystemVersioning { get; }
 
     internal static void ValidateUnique<T>(IEnumerable<T> values, string description, string parameterName,
         IEqualityComparer<T>? comparer = null)
@@ -896,6 +932,20 @@ public sealed class CatalogDefinition
         }
 
         var tablesById = _tables.ToDictionary(table => table.Id);
+        foreach (var current in _tables.Where(table => table.SystemVersioning is not null))
+        {
+            var temporal = current.SystemVersioning!;
+            if (!tablesById.TryGetValue(temporal.HistoryTableId, out var history) || history.Id == current.Id)
+                throw new ArgumentException($"System-versioned table '{current.Name}' references an invalid history table.", nameof(tables));
+            if (history.SystemVersioning is not null)
+                throw new ArgumentException("A temporal history table cannot itself be system-versioned.", nameof(tables));
+            if (_tables.Count(table => table.SystemVersioning?.HistoryTableId == history.Id) != 1)
+                throw new ArgumentException("A temporal history table must belong to exactly one current table.", nameof(tables));
+            if (current.Columns.Count != history.Columns.Count || current.Columns.Zip(history.Columns).Any(pair =>
+                    pair.First.Id != pair.Second.Id || pair.First.Name != pair.Second.Name ||
+                    pair.First.Type != pair.Second.Type || pair.First.IsNullable != pair.Second.IsNullable))
+                throw new ArgumentException("A temporal history table must have the current table's ordered column schema.", nameof(tables));
+        }
         foreach (var group in _indexes.GroupBy(index => index.TableId))
         {
             CatalogTable.ValidateUnique(group.Select(index => index.Name), "Index names", nameof(indexes), StringComparer.Ordinal);

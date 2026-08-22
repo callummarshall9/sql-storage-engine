@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 7;
-    public const uint Magic = 0x37544143; // "CAT7" in persisted little-endian byte order.
+    public const ushort FormatVersion = 8;
+    public const uint Magic = 0x38544143; // "CAT8" in persisted little-endian byte order.
+    private const uint Version7Magic = 0x37544143;
     private const uint Version6Magic = 0x36544143;
     public const int HeaderLength = 32;
     public const int MaximumRecordCount = 65_535;
@@ -73,6 +74,13 @@ public static class CatalogCodec
             foreach (var check in table.CheckConstraints) { WriteString(output, check.Name); WriteString(output, check.Expression); }
             WriteByte(output, table.NextIdentityValue is null ? (byte)0 : (byte)1);
             if (table.NextIdentityValue is { } nextIdentity) WriteBigInteger(output, nextIdentity);
+            WriteByte(output, table.SystemVersioning is null ? (byte)0 : (byte)1);
+            if (table.SystemVersioning is { } temporal)
+            {
+                WriteUInt64(output, temporal.HistoryTableId.Value);
+                WriteUInt64(output, temporal.PeriodStartColumnId.Value);
+                WriteUInt64(output, temporal.PeriodEndColumnId.Value);
+            }
         }
         foreach (var index in catalog.Indexes)
         {
@@ -139,10 +147,11 @@ public static class CatalogCodec
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version6Magic)) throw new StorageFormatException("Invalid bootstrap catalog magic number.");
+        if (magic is not (Magic or Version7Magic or Version6Magic))
+            throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or FormatVersion) || version == 6 && magic != Version6Magic ||
-            version == FormatVersion && magic != Magic)
+        if (version is not (6 or 7 or FormatVersion) || version == 6 && magic != Version6Magic ||
+            version == 7 && magic != Version7Magic || version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();
@@ -190,8 +199,19 @@ public static class CatalogCodec
             for (var checkNumber = 0; checkNumber < checkCount; checkNumber++)
                 checks[checkNumber] = new CatalogCheckConstraint(reader.String(), reader.String());
             var nextIdentity = reader.Boolean() ? reader.BigInteger() : (BigInteger?)null;
+            CatalogSystemVersioning? systemVersioning = null;
+            if (version >= 8 && reader.Boolean())
+            {
+                var historyTableId = new TableId(reader.UInt64());
+                var periodStartColumnId = new ColumnId(reader.UInt64());
+                var periodEndColumnId = new ColumnId(reader.UInt64());
+                try { systemVersioning = new CatalogSystemVersioning(
+                    historyTableId, periodStartColumnId, periodEndColumnId); }
+                catch (ArgumentException exception)
+                { throw new StorageFormatException("Invalid system-versioning metadata.", exception); }
+            }
             try { tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
-                databaseName, schemaName)); }
+                databaseName, schemaName, systemVersioning)); }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog table record.", exception); }
         }
         List<CatalogIndex> indexes = new(indexCount);

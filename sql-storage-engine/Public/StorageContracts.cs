@@ -7,6 +7,8 @@ namespace sql_storage_engine;
 
 /// <summary>A row and its opaque, generation-safe physical identity.</summary>
 public sealed record StoredRow(RowId RowId, Row Row);
+/// <summary>A temporal row with an unambiguous current or history table identity.</summary>
+public sealed record StorageTemporalRow(TableId SourceTableId, RowId RowId, Row Row);
 public sealed record SpecializedIndexMatch(RowId RowId, double Distance);
 
 /// <summary>A complete or leading composite-key bound for an index scan.</summary>
@@ -137,6 +139,54 @@ public sealed record StorageRowsTableSample : StorageTableSample
     public long RowCount { get; }
 }
 
+/// <summary>A typed native FOR SYSTEM_TIME selection over a system-versioned current/history table pair.</summary>
+public abstract record StorageTemporalQuery
+{
+    internal static DateTime NormalizeUtc(DateTime value, string parameterName) => value.Kind switch
+    {
+        DateTimeKind.Utc => DateTime.SpecifyKind(value, DateTimeKind.Unspecified),
+        DateTimeKind.Unspecified => value,
+        _ => throw new ArgumentException("Temporal query boundaries must be UTC or have unspecified kind.", parameterName)
+    };
+
+    internal static (DateTime Start, DateTime End) NormalizeRange(DateTime start, DateTime end)
+    {
+        start = NormalizeUtc(start, nameof(start));
+        end = NormalizeUtc(end, nameof(end));
+        if (start > end) throw new ArgumentException("A temporal range start cannot be after its end.");
+        return (start, end);
+    }
+}
+
+public sealed record StorageTemporalAsOf : StorageTemporalQuery
+{
+    public StorageTemporalAsOf(DateTime instant) => Instant = NormalizeUtc(instant, nameof(instant));
+    public DateTime Instant { get; }
+}
+
+public sealed record StorageTemporalFromTo : StorageTemporalQuery
+{
+    public StorageTemporalFromTo(DateTime start, DateTime end) => (Start, End) = NormalizeRange(start, end);
+    public DateTime Start { get; }
+    public DateTime End { get; }
+}
+
+public sealed record StorageTemporalBetweenAnd : StorageTemporalQuery
+{
+    public StorageTemporalBetweenAnd(DateTime start, DateTime end) => (Start, End) = NormalizeRange(start, end);
+    public DateTime Start { get; }
+    public DateTime End { get; }
+}
+
+public sealed record StorageTemporalContainedIn : StorageTemporalQuery
+{
+    public StorageTemporalContainedIn(DateTime start, DateTime end) => (Start, End) = NormalizeRange(start, end);
+    public DateTime Start { get; }
+    public DateTime End { get; }
+}
+
+public sealed record StorageTemporalAll : StorageTemporalQuery;
+
 /// <summary>Options controlling the storage engine's bounded in-memory resources.</summary>
 public sealed record StorageEngineOptions
 {
@@ -144,6 +194,7 @@ public sealed record StorageEngineOptions
     public int BufferPoolCapacity { get; init; } = 256;
     public int InlineValueThreshold { get; init; } = 1024;
     public string DefaultCollation { get; init; } = "SQL_Latin1_General_CP1_CI_AS";
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 }
 
 /// <summary>Permission context used when projecting dynamically masked query results.</summary>
@@ -167,6 +218,7 @@ public sealed record StorageReadOptions
 /// <summary>Read-only catalog operations intended for name binding and semantic analysis.</summary>
 public interface IStorageCatalog
 {
+    DatabaseId DatabaseId { get; }
     IReadOnlyList<CatalogTable> Tables { get; }
     IReadOnlyList<CatalogIndex> Indexes { get; }
     IReadOnlyList<CatalogScalarType> ScalarTypes { get; }
@@ -177,6 +229,8 @@ public interface IStorageCatalog
     bool TryGetTable(string name, out CatalogTable? table);
     bool TryGetTable(CatalogTableName name, out CatalogTable? table);
     bool TryGetTable(TableId id, out CatalogTable? table);
+    bool TryGetTemporalHistory(TableId currentTableId, out CatalogTable? historyTable);
+    bool TryGetTemporalCurrent(TableId historyTableId, out CatalogTable? currentTable);
     bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index);
     IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId);
     bool TryGetScalarType(string schemaName, string name, out CatalogScalarType? type);
@@ -201,6 +255,10 @@ public interface IStorageTable
         CancellationToken cancellationToken = default);
     IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample, StorageReadOptions readOptions,
         CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query,
+        CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query, StorageReadOptions readOptions,
+        CancellationToken cancellationToken = default);
     ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
         CancellationToken cancellationToken = default);
     ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default);
@@ -209,6 +267,9 @@ public interface IStorageTable
 /// <summary>A statement-scoped view whose mutations commit or roll back as one durable unit.</summary>
 public interface IStorageStatement
 {
+    ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name, IEnumerable<CatalogColumn> columns,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default);
     ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
 }
 
@@ -240,12 +301,18 @@ public interface IStorageIndex
 /// <summary>The supported high-level boundary between a SQL engine and this storage package.</summary>
 public interface IStorageEngine : IAsyncDisposable
 {
+    DatabaseId DatabaseId { get; }
     IStorageCatalog Catalog { get; }
     ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         CancellationToken cancellationToken = default);
     ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         IEnumerable<CatalogCheckConstraint> checkConstraints, CancellationToken cancellationToken = default);
     ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name, IEnumerable<CatalogColumn> columns,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default);
+    ValueTask<CatalogTable> CreateSystemVersionedTableAsync(CatalogTableName name,
+        IEnumerable<CatalogColumn> columns, ColumnId periodStartColumnId, ColumnId periodEndColumnId,
+        CatalogTableName? historyTableName = null,
         IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
         CancellationToken cancellationToken = default);
     ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,

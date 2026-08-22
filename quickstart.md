@@ -44,11 +44,11 @@ Your repository `NuGet.config` can then contain only the source URL:
 
 ## 2. Install the package
 
-Install the sampling-capable contract release (or a later compatible version):
+Install the sampling- and temporal-capable contract release (or a later compatible version):
 
 ```bash
 dotnet add package SqlStorageEngine \
-  --version 1.5.0 \
+  --version 1.6.0 \
   --source "https://nuget.pkg.github.com/callummarshall9/index.json"
 ```
 
@@ -112,6 +112,36 @@ Because sampling is page-granular, a rows sample is approximate and can return m
 Omitting the seed produces a fresh selection for each enumeration. Both sample forms retain scan cancellation, early
 disposal, statement coordination, masking, corruption detection, and row-decoding behavior.
 
+System-versioned tables publish an explicit current/history identity and use native temporal scans. The storage engine
+generates the two UTC `datetime2` period values and atomically archives the previous version on update or delete:
+
+```csharp
+CatalogTable accounts = await storage.CreateSystemVersionedTableAsync(
+    new CatalogTableName("example", "dbo", "accounts"),
+    [
+        new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false),
+        new CatalogColumn(new ColumnId(2), "balance", SqlType.Int, false),
+        new CatalogColumn(new ColumnId(3), "valid_from", SqlType.DateTime2(), false,
+            generatedAlways: CatalogGeneratedAlwaysKind.RowStart, isHidden: true),
+        new CatalogColumn(new ColumnId(4), "valid_to", SqlType.DateTime2(), false,
+            generatedAlways: CatalogGeneratedAlwaysKind.RowEnd, isHidden: true)
+    ],
+    new ColumnId(3),
+    new ColumnId(4));
+
+IStorageTable temporalAccounts = await storage.OpenTableAsync(accounts.Id);
+await foreach (StorageTemporalRow version in temporalAccounts.TemporalScanAsync(
+    new StorageTemporalAsOf(new DateTime(2026, 1, 1))))
+{
+    Console.WriteLine($"{version.SourceTableId}: {version.RowId}");
+}
+```
+
+`StorageTemporalAsOf`, `StorageTemporalFromTo`, `StorageTemporalBetweenAnd`,
+`StorageTemporalContainedIn`, and `StorageTemporalAll` preserve SQL Server's distinct interval boundaries. A history
+table cannot be mutated through its public handle. Direct temporal update/delete calls and multi-mutation statement
+scopes both use the durable statement journal, so current and history state recover together after failure or restart.
+
 Database-scoped SQL Server types are created before tables that reference them:
 
 ```csharp
@@ -140,7 +170,10 @@ path/value seeks in addition to whole-value lookup. The full coverage and normal
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are
 flushed before they return. Use `ExecuteStatementAsync` when several row mutations must commit as one crash-atomic
-statement; the callback opens statement-scoped tables and all of its changes are published once or restored together.
+statement; the callback can create a table, open statement-scoped tables, and populate the new target so catalog plus
+rows are published once or restored together. `IStorageEngine.DatabaseId` and `IStorageCatalog.DatabaseId` expose the
+persisted database incarnation, allowing prepared execution bindings to reject a different database even when its
+table metadata is byte-for-byte identical.
 The lower-level transaction classes remain implementation primitives rather than the executor contract.
 
 Use `TryInsertAsync` when an index declares `IGNORE_DUP_KEY`; its `TableInsertResult` represents either the new `RowId`

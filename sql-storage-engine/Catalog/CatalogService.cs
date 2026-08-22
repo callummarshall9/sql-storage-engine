@@ -107,6 +107,63 @@ public sealed class CatalogService
         }
     }
 
+    /// <summary>Creates a current/history heap pair and publishes their temporal relationship atomically.</summary>
+    public async ValueTask<CatalogTable> CreateSystemVersionedTableAsync(CatalogTableName name,
+        CatalogTableName historyName, ulong schemaVersion, IEnumerable<CatalogColumn> columns,
+        ColumnId periodStartColumnId, ColumnId periodEndColumnId,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(historyName);
+        ArgumentNullException.ThrowIfNull(columns);
+        if (name == historyName)
+            throw new ArgumentException("The current and history tables must have different names.", nameof(historyName));
+        if (_definition.Tables.Any(table => table.QualifiedName == name || table.QualifiedName == historyName))
+            throw new CatalogConflictException("The current or history table name already exists.");
+
+        var columnSnapshot = columns.ToArray();
+        var checkSnapshot = checkConstraints?.ToArray() ?? [];
+        var nextValue = _definition.Tables.Count == 0 ? 1UL : checked(_definition.Tables.Max(table => table.Id.Value) + 1);
+        var currentId = new TableId(nextValue);
+        var historyId = new TableId(checked(nextValue + 1));
+        var temporal = new CatalogSystemVersioning(historyId, periodStartColumnId, periodEndColumnId);
+        _ = new CatalogTable(currentId, name.Name, schemaVersion, new PageId(1), columnSnapshot, checkSnapshot,
+            databaseName: name.DatabaseName, schemaName: name.SchemaName, systemVersioning: temporal);
+
+        TableHeap? currentHeap = null;
+        TableHeap? historyHeap = null;
+        try
+        {
+            currentHeap = await TableHeap.CreateAsync(_bufferPool, _allocator, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            historyHeap = await TableHeap.CreateAsync(_bufferPool, _allocator, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+            var current = new CatalogTable(currentId, name.Name, schemaVersion, currentHeap.RootPageId,
+                columnSnapshot, checkSnapshot, databaseName: name.DatabaseName, schemaName: name.SchemaName,
+                systemVersioning: temporal);
+            var history = new CatalogTable(historyId, historyName.Name, schemaVersion, historyHeap.RootPageId,
+                columnSnapshot, databaseName: historyName.DatabaseName, schemaName: historyName.SchemaName);
+            var candidate = new CatalogDefinition(_definition.Tables.Append(current).Append(history),
+                _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
+                _definition.XmlSchemaCollections, _definition.Assemblies);
+            var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
+            _definition = candidate;
+            RootPageId = written.RootPageId;
+            return current;
+        }
+        catch
+        {
+            foreach (var heap in new[] { historyHeap, currentHeap }.Where(heap => heap is not null))
+            {
+                await _bufferPool.DiscardPageAsync(heap!.RootPageId, CancellationToken.None).ConfigureAwait(false);
+                await _allocator.FreeAsync(heap.RootPageId, CancellationToken.None).ConfigureAwait(false);
+            }
+            throw;
+        }
+    }
+
     public async ValueTask<SqlValue> AllocateIdentityAsync(TableId tableId,
         CancellationToken cancellationToken = default)
     {
@@ -121,7 +178,8 @@ public sealed class CatalogService
                 SqlValue.Decimal(new SqlDecimal(current, 0)));
             var next = current + identityColumn.Identity!.Increment;
             var replacement = new CatalogTable(table.Id, table.Name, table.SchemaVersion, table.FirstHeapPageId,
-                table.Columns, table.CheckConstraints, next, table.DatabaseName, table.SchemaName);
+                table.Columns, table.CheckConstraints, next, table.DatabaseName, table.SchemaName,
+                table.SystemVersioning);
             var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
@@ -452,7 +510,7 @@ public sealed class CatalogService
         }
         var tables = _definition.Tables.Select(table => new CatalogTable(table.Id, table.Name, table.SchemaVersion,
             table.FirstHeapPageId, table.Columns.Select(RebindColumn), table.CheckConstraints, table.NextIdentityValue,
-            table.DatabaseName, table.SchemaName));
+            table.DatabaseName, table.SchemaName, table.SystemVersioning));
         var tableTypes = _definition.TableTypes.Select(type => new CatalogTableType(type.SchemaName, type.Name,
             type.Columns.Select(RebindColumn), type.Indexes, type.CheckConstraints, type.IsMemoryOptimized));
         return new CatalogDefinition(tables, _definition.Indexes, _definition.ScalarTypes, tableTypes,

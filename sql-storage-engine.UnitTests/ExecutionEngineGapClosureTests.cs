@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using sql_storage_engine.Catalog;
+using sql_storage_engine.Identifiers;
 using sql_storage_engine.Rows;
 using sql_storage_engine.Transactions;
 
@@ -7,6 +8,65 @@ namespace sql_storage_engine.UnitTests;
 
 public sealed class ExecutionEngineGapClosureTests
 {
+    [Test]
+    public async Task DatabaseIncarnationIsPublicStableAcrossReopenAndUniqueAcrossFiles()
+    {
+        var firstPath = TemporaryPath();
+        var secondPath = TemporaryPath();
+        try
+        {
+            DatabaseId incarnation;
+            await using (var first = await StorageEngine.CreateAsync(firstPath))
+            {
+                incarnation = first.DatabaseId;
+                first.Catalog.DatabaseId.Should().Be(incarnation);
+            }
+            await using (var reopened = await StorageEngine.OpenAsync(firstPath))
+                reopened.DatabaseId.Should().Be(incarnation);
+            await using (var second = await StorageEngine.CreateAsync(secondPath))
+                second.DatabaseId.Should().NotBe(incarnation);
+        }
+        finally
+        {
+            DeleteDatabase(firstPath);
+            DeleteDatabase(secondPath);
+        }
+    }
+
+    [Test]
+    public async Task StatementCanAtomicallyCreateAndPopulateATable()
+    {
+        var path = TemporaryPath();
+        try
+        {
+            await using var engine = await StorageEngine.CreateAsync(path);
+            await ((Func<Task>)(async () => await engine.ExecuteStatementAsync(async (statement, token) =>
+            {
+                var table = await statement.CreateTableAsync(
+                    new CatalogTableName("app", "reports", "failed_target"), Columns(), cancellationToken: token);
+                await (await statement.OpenTableAsync(table.Id, token))
+                    .InsertAsync(new Row([SqlValue.Integer(1)]), token);
+                throw new InvalidOperationException("fail after target population");
+            }))).Should().ThrowAsync<InvalidOperationException>();
+            engine.Catalog.TryGetTable(new CatalogTableName("app", "reports", "failed_target"), out _)
+                .Should().BeFalse();
+
+            await engine.ExecuteStatementAsync(async (statement, token) =>
+            {
+                var table = await statement.CreateTableAsync(
+                    new CatalogTableName("app", "reports", "target"), Columns(), cancellationToken: token);
+                await (await statement.OpenTableAsync(table.Id, token))
+                    .InsertAsync(new Row([SqlValue.Integer(7)]), token);
+            });
+
+            engine.Catalog.TryGetTable(new CatalogTableName("app", "reports", "target"), out var created)
+                .Should().BeTrue();
+            var rows = await CollectAsync((await engine.OpenTableAsync(created!.Id)).ScanAsync());
+            ((IntegerSqlValue)rows.Single().Row.Values[0]).Value.Should().Be(7);
+        }
+        finally { DeleteDatabase(path); }
+    }
+
     [Test]
     public async Task QualifiedTables_AreUnambiguousAndSurviveReopen()
     {

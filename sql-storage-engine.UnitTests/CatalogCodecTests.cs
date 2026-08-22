@@ -28,7 +28,23 @@ public sealed class CatalogCodecTests
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
         Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
-            .Should().Be("AyWCqQiaHcNXsFzgyi/atlk1+ZdVJlkqfzEAYYKjRjQ=");
+            .Should().Be("t54qdXyll74nM//UNn520+SdJz8s6tfgDCZNoAS4ZNE=");
+    }
+
+    [Test]
+    public void Version7CatalogWithoutTemporalMetadataRemainsReadable()
+    {
+        var version8 = CatalogCodec.Encode(Sample());
+        const int indexRecordLength = 58;
+        var temporalMarkerOffset = version8.Length - indexRecordLength - 1;
+        var version7 = version8[..temporalMarkerOffset].Concat(version8[(temporalMarkerOffset + 1)..]).ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(version7, 0x37544143);
+        BinaryPrimitives.WriteUInt16LittleEndian(version7.AsSpan(4), 7);
+
+        var decoded = CatalogCodec.Decode(version7);
+
+        decoded.Tables.Single().SystemVersioning.Should().BeNull();
+        decoded.Tables.Single().QualifiedName.Should().Be(Sample().Tables.Single().QualifiedName);
     }
 
     [Test]

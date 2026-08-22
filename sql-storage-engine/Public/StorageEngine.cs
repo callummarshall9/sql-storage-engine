@@ -21,6 +21,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     private CatalogService _catalog;
     private readonly OverflowManager _overflow;
     private readonly int _inlineValueThreshold;
+    private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _statementGate = new(1, 1);
     private long _handleGeneration;
     private bool _disposed;
@@ -33,9 +34,11 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         _catalog = catalog;
         _overflow = new OverflowManager(bufferPool, database);
         _inlineValueThreshold = options.InlineValueThreshold;
+        _timeProvider = options.TimeProvider;
     }
 
     public IStorageCatalog Catalog => this;
+    public DatabaseId DatabaseId => _database.Header.DatabaseId;
     public IReadOnlyList<CatalogTable> Tables => _catalog.Tables;
     public IReadOnlyList<CatalogIndex> Indexes => _catalog.Indexes;
     public IReadOnlyList<CatalogScalarType> ScalarTypes => _catalog.ScalarTypes;
@@ -84,6 +87,21 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public bool TryGetTable(string name, out CatalogTable? table) => _catalog.TryOpenTable(name, out table);
     public bool TryGetTable(CatalogTableName name, out CatalogTable? table) => _catalog.TryOpenTable(name, out table);
     public bool TryGetTable(TableId id, out CatalogTable? table) => _catalog.TryOpenTable(id, out table);
+    public bool TryGetTemporalHistory(TableId currentTableId, out CatalogTable? historyTable)
+    {
+        historyTable = _catalog.TryOpenTable(currentTableId, out var current) &&
+                       current!.SystemVersioning is { } temporal &&
+                       _catalog.TryOpenTable(temporal.HistoryTableId, out var history)
+            ? history
+            : null;
+        return historyTable is not null;
+    }
+    public bool TryGetTemporalCurrent(TableId historyTableId, out CatalogTable? currentTable)
+    {
+        currentTable = _catalog.Tables.SingleOrDefault(table =>
+            table.SystemVersioning?.HistoryTableId == historyTableId);
+        return currentTable is not null;
+    }
     public bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index) =>
         _catalog.TryOpenIndex(name, tableId, out index);
     public IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId) =>
@@ -116,6 +134,22 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         ThrowIfDisposed();
         var table = await _catalog.CreateTableAsync(name, 1, ApplyDatabaseCollation(columns), checkConstraints,
             cancellationToken).ConfigureAwait(false);
+        await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+        return table;
+    }
+
+    public async ValueTask<CatalogTable> CreateSystemVersionedTableAsync(CatalogTableName name,
+        IEnumerable<CatalogColumn> columns, ColumnId periodStartColumnId, ColumnId periodEndColumnId,
+        CatalogTableName? historyTableName = null,
+        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(name);
+        var columnSnapshot = ApplyDatabaseCollation(columns).ToArray();
+        historyTableName ??= new CatalogTableName(name.DatabaseName, name.SchemaName, name.Name + "History");
+        var table = await _catalog.CreateSystemVersionedTableAsync(name, historyTableName, 1, columnSnapshot,
+            periodStartColumnId, periodEndColumnId, checkConstraints, cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
         return table;
     }
@@ -232,10 +266,24 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                 await PublishCatalogAsync(token).ConfigureAwait(false);
                 return value;
             },
-            _database.AllocateGeneratedValueAsync,
+            AllocateGeneratedValueAsync,
             () => _catalog.Indexes.Where(index => index.TableId == tableId)
                 .Select(index => new TableIndex(index, _catalog.OpenIndex(index))).ToArray());
         return storage;
+    }
+
+    private ValueTask<SqlValue> AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind kind,
+        CancellationToken cancellationToken)
+    {
+        if (kind == CatalogGeneratedAlwaysKind.RowStart)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            return ValueTask.FromResult<SqlValue>(SqlValue.DateTime(DateTime.SpecifyKind(now, DateTimeKind.Unspecified)));
+        }
+        if (kind == CatalogGeneratedAlwaysKind.RowEnd)
+            return ValueTask.FromResult<SqlValue>(SqlValue.DateTime(DateTime.MaxValue));
+        return _database.AllocateGeneratedValueAsync(kind, cancellationToken);
     }
 
     public ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId,
@@ -409,6 +457,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         if (options.BufferPoolCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(options.BufferPoolCapacity));
         if (options.InlineValueThreshold < 0 || options.InlineValueThreshold > RowCodec.MaximumInlineValueLength)
             throw new ArgumentOutOfRangeException(nameof(options.InlineValueThreshold));
+        ArgumentNullException.ThrowIfNull(options.TimeProvider);
         _ = SqlCollation.Parse(options.DefaultCollation);
     }
 
@@ -421,12 +470,14 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         public async ValueTask<RowId> InsertAsync(Row row, CancellationToken cancellationToken = default)
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            RejectHistoryMutation();
             var id = await storage.InsertAsync(row, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return id;
         }
         public async ValueTask<TableInsertResult> TryInsertAsync(Row row, CancellationToken cancellationToken = default)
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            RejectHistoryMutation();
             var result = await storage.TryInsertAsync(row, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
         }
@@ -476,17 +527,164 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             await foreach (var stored in storage.SampleAsync(sample, cancellationToken).ConfigureAwait(false))
                 yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
         }
-        public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update, CancellationToken cancellationToken = default)
+        public async IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            var result = await storage.UpdateAsync(rowId, update, cancellationToken).ConfigureAwait(false);
+            ArgumentNullException.ThrowIfNull(query);
+            await foreach (var stored in TemporalRowsAsync(query, cancellationToken).ConfigureAwait(false))
+                yield return stored;
+        }
+        public async IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query,
+            StorageReadOptions readOptions,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            ArgumentNullException.ThrowIfNull(query);
+            ArgumentNullException.ThrowIfNull(readOptions);
+            await foreach (var stored in TemporalRowsAsync(query, cancellationToken).ConfigureAwait(false))
+                yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
+        }
+        public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update, CancellationToken cancellationToken = default)
+        {
+            EnsureActive();
+            if (coordinate && Definition.SystemVersioning is not null)
+            {
+                TableUpdateResult? atomicResult = null;
+                await owner.ExecuteStatementAsync(async (statement, token) =>
+                {
+                    var table = await statement.OpenTableAsync(Definition.Id, token).ConfigureAwait(false);
+                    atomicResult = await table.UpdateAsync(rowId, update, token).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+                return atomicResult!;
+            }
+            using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            RejectHistoryMutation();
+            var result = Definition.SystemVersioning is null
+                ? await storage.UpdateAsync(rowId, update, cancellationToken).ConfigureAwait(false)
+                : await UpdateTemporalAsync(rowId, update, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
         }
         public async ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default)
         {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            var result = await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false);
+            EnsureActive();
+            if (coordinate && Definition.SystemVersioning is not null)
+            {
+                TableDeleteResult? atomicResult = null;
+                await owner.ExecuteStatementAsync(async (statement, token) =>
+                {
+                    var table = await statement.OpenTableAsync(Definition.Id, token).ConfigureAwait(false);
+                    atomicResult = await table.DeleteAsync(rowId, token).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+                return atomicResult!;
+            }
+            using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            RejectHistoryMutation();
+            var result = Definition.SystemVersioning is null
+                ? await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false)
+                : await DeleteTemporalAsync(rowId, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
+        }
+
+        private async IAsyncEnumerable<StorageTemporalRow> TemporalRowsAsync(StorageTemporalQuery query,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var temporal = Definition.SystemVersioning ?? throw new InvalidOperationException(
+                $"Table {Definition.QualifiedName} is not system-versioned.");
+            var history = await owner.OpenTableStorageAsync(temporal.HistoryTableId, cancellationToken)
+                .ConfigureAwait(false);
+            await foreach (var row in history.ScanAsync(cancellationToken).ConfigureAwait(false))
+                if (MatchesTemporal(row.Row, temporal, query))
+                    yield return new StorageTemporalRow(temporal.HistoryTableId, row.RowId, row.Row);
+            await foreach (var row in storage.ScanAsync(cancellationToken).ConfigureAwait(false))
+                if (MatchesTemporal(row.Row, temporal, query))
+                    yield return new StorageTemporalRow(Definition.Id, row.RowId, row.Row);
+        }
+
+        private async ValueTask<TableUpdateResult> UpdateTemporalAsync(RowId rowId, RowUpdate update,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(update);
+            var old = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
+            if (!old.Found) return new TableUpdateResult(false, rowId, rowId);
+            var (history, archived, timestamp) = await ArchiveAsync(old.Row!, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var result = await storage.UpdateSystemVersionedAsync(rowId, update, timestamp, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!result.Updated) await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        private async ValueTask<TableDeleteResult> DeleteTemporalAsync(RowId rowId,
+            CancellationToken cancellationToken)
+        {
+            var old = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
+            if (!old.Found) return new TableDeleteResult(false, []);
+            var (history, archived, _) = await ArchiveAsync(old.Row!, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var result = await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false);
+                if (!result.Deleted) await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
+                return result;
+            }
+            catch
+            {
+                await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
+
+        private async ValueTask<(TableStorage History, RowId Archived, SqlValue Timestamp)> ArchiveAsync(Row oldRow,
+            CancellationToken cancellationToken)
+        {
+            var temporal = Definition.SystemVersioning!;
+            var history = await owner.OpenTableStorageAsync(temporal.HistoryTableId, cancellationToken)
+                .ConfigureAwait(false);
+            var endPosition = ColumnPosition(temporal.PeriodEndColumnId);
+            var startColumn = Definition.Columns[ColumnPosition(temporal.PeriodStartColumnId)];
+            var timestamp = SqlConversion.ConvertTo(startColumn.Type,
+                await owner.AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind.RowStart, cancellationToken)
+                    .ConfigureAwait(false));
+            var values = oldRow.Values.ToArray();
+            if (((DateTimeSqlValue)timestamp).Value <
+                ((DateTimeSqlValue)values[ColumnPosition(temporal.PeriodStartColumnId)]).Value)
+                throw new InvalidOperationException("The temporal clock moved before the current row's period start.");
+            values[endPosition] = timestamp;
+            var inserted = await history.InsertPreparedAsync(new Row(values), cancellationToken).ConfigureAwait(false);
+            if (!inserted.Inserted) throw new InvalidOperationException("A temporal history insert was unexpectedly ignored.");
+            return (history, inserted.RowId!.Value, timestamp);
+        }
+
+        private bool MatchesTemporal(Row row, CatalogSystemVersioning temporal, StorageTemporalQuery query)
+        {
+            var start = ((DateTimeSqlValue)row.Values[ColumnPosition(temporal.PeriodStartColumnId)]).Value;
+            var end = ((DateTimeSqlValue)row.Values[ColumnPosition(temporal.PeriodEndColumnId)]).Value;
+            return query switch
+            {
+                StorageTemporalAsOf asOf => start <= asOf.Instant && end > asOf.Instant,
+                StorageTemporalFromTo range => start < range.End && end > range.Start,
+                StorageTemporalBetweenAnd range => start <= range.End && end > range.Start,
+                StorageTemporalContainedIn range => start >= range.Start && end <= range.End,
+                StorageTemporalAll => true,
+                _ => throw new ArgumentOutOfRangeException(nameof(query), query, "Unknown temporal query type.")
+            };
+        }
+
+        private int ColumnPosition(ColumnId id) => Definition.Columns.Select((column, position) => (column, position))
+            .Single(item => item.column.Id == id).position;
+
+        private void RejectHistoryMutation()
+        {
+            if (owner.TryGetTemporalCurrent(Definition.Id, out var current))
+                throw new InvalidOperationException(
+                    $"Temporal history table {Definition.QualifiedName} is maintained by {current!.QualifiedName}.");
         }
 
         private void EnsureActive()
@@ -524,6 +722,14 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     private sealed class StorageStatement(StorageEngine owner) : IStorageStatement
     {
         private bool _active = true;
+        public async ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name,
+            IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (!_active) throw new InvalidOperationException("The statement scope has completed.");
+            return await owner.CreateTableAsync(name, columns, checkConstraints, cancellationToken)
+                .ConfigureAwait(false);
+        }
         public async ValueTask<IStorageTable> OpenTableAsync(TableId tableId,
             CancellationToken cancellationToken = default)
         {
