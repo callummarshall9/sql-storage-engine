@@ -101,6 +101,33 @@ public sealed class TableStorage
                 await _rowCodec.DecodeAsync(entry.Row, _schema, cancellationToken).ConfigureAwait(false)));
     }
 
+    /// <summary>Streams a native page-granularity SYSTEM sample of the live heap.</summary>
+    public async IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sample);
+        var percentage = sample switch
+        {
+            StoragePercentTableSample percent => percent.Percentage,
+            StorageRowsTableSample rows => await RowSamplePercentageAsync(rows.RowCount, cancellationToken)
+                .ConfigureAwait(false),
+            _ => throw new ArgumentOutOfRangeException(nameof(sample), sample, "Unknown table sample type.")
+        };
+        await foreach (var entry in _heap.SampleAsync(percentage, sample.RepeatableSeed, cancellationToken)
+                           .ConfigureAwait(false))
+            yield return new StoredRow(entry.RowId, ProjectColumnSet(
+                await _rowCodec.DecodeAsync(entry.Row, _schema, cancellationToken).ConfigureAwait(false)));
+    }
+
+    private async ValueTask<decimal> RowSamplePercentageAsync(long requestedRows,
+        CancellationToken cancellationToken)
+    {
+        if (requestedRows == 0) return 0;
+        var liveRows = await _heap.GetLiveRowCountAsync(cancellationToken).ConfigureAwait(false);
+        if (liveRows == 0 || requestedRows >= liveRows) return 100;
+        return (decimal)requestedRows * 100m / liveRows;
+    }
+
     /// <summary>Validates and inserts one logical row into the heap and every published index.</summary>
     public async ValueTask<RowId> InsertAsync(Row row, CancellationToken cancellationToken = default)
     {

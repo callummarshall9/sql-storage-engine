@@ -272,6 +272,97 @@ public sealed class TableHeap
         }
     }
 
+    /// <summary>
+    /// Enumerates complete heap pages selected by a stable SYSTEM sampling function. Rows on an unselected page are not
+    /// copied from the buffer pool.
+    /// </summary>
+    public async IAsyncEnumerable<(RowId RowId, ReadOnlyMemory<byte> Row)> SampleAsync(
+        decimal pagePercentage, long? repeatableSeed = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (pagePercentage is < 0 or > 100) throw new ArgumentOutOfRangeException(nameof(pagePercentage));
+        if (repeatableSeed is < 0) throw new ArgumentOutOfRangeException(nameof(repeatableSeed));
+        cancellationToken.ThrowIfCancellationRequested();
+        if (pagePercentage == 0) yield break;
+
+        var selectionSeed = repeatableSeed is { } seed
+            ? unchecked((ulong)seed)
+            : unchecked((ulong)Random.Shared.NextInt64());
+        var current = RootPageId;
+        HashSet<PageId> seen = [];
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!seen.Add(current)) throw new StorageCorruptionException($"Cycle detected in table heap at {current}.");
+            IReadOnlyList<HeapPageRow> rows;
+            PageId? next;
+            try
+            {
+                using var pin = await _bufferPool.GetPageAsync(current, cancellationToken).ConfigureAwait(false);
+                var page = new HeapPage(pin.Memory, current);
+                rows = pagePercentage == 100 || IsSampledPage(current, pagePercentage, selectionSeed)
+                    ? page.ReadLiveRows()
+                    : [];
+                next = page.NextPageId;
+            }
+            catch (StorageResourceException exception)
+            {
+                throw new StorageCorruptionException($"Heap chain references inaccessible {current}.", exception);
+            }
+
+            foreach (var row in rows)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return (new RowId(current, row.SlotId, row.Generation), row.Bytes);
+            }
+            if (next is not { } nextPage) yield break;
+            current = nextPage;
+        }
+    }
+
+    /// <summary>Counts live slots without copying or decoding row payloads.</summary>
+    public async ValueTask<long> GetLiveRowCountAsync(CancellationToken cancellationToken = default)
+    {
+        var current = RootPageId;
+        HashSet<PageId> seen = [];
+        long count = 0;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!seen.Add(current)) throw new StorageCorruptionException($"Cycle detected in table heap at {current}.");
+            PageId? next;
+            try
+            {
+                using var pin = await _bufferPool.GetPageAsync(current, cancellationToken).ConfigureAwait(false);
+                var page = new HeapPage(pin.Memory, current);
+                count = checked(count + page.LiveRowCount);
+                next = page.NextPageId;
+            }
+            catch (StorageResourceException exception)
+            {
+                throw new StorageCorruptionException($"Heap chain references inaccessible {current}.", exception);
+            }
+            if (next is not { } nextPage) return count;
+            current = nextPage;
+        }
+    }
+
+    private static bool IsSampledPage(PageId pageId, decimal percentage, ulong seed)
+    {
+        var value = Mix(pageId.Value ^ Mix(seed + 0x9E3779B97F4A7C15UL));
+        var unitInterval = value / ((decimal)ulong.MaxValue + 1m);
+        return unitInterval < percentage / 100m;
+    }
+
+    private static ulong Mix(ulong value)
+    {
+        value ^= value >> 30;
+        value *= 0xBF58476D1CE4E5B9UL;
+        value ^= value >> 27;
+        value *= 0x94D049BB133111EBUL;
+        return value ^ value >> 31;
+    }
+
     private async ValueTask<bool> FindPageAsync(PageId target, CancellationToken cancellationToken)
     {
         if (_knownPages.Contains(target)) return true;

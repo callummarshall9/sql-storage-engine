@@ -46,6 +46,18 @@ public sealed class HeapPage
         }
     }
 
+    internal int LiveRowCount
+    {
+        get
+        {
+            var header = Header;
+            var count = 0;
+            for (ushort index = 0; index < header.SlotCount; index++)
+                if (HeapPageLayout.ReadSlot(_page.Span, new SlotId(index)).State == HeapSlotState.Live) count++;
+            return count;
+        }
+    }
+
     /// <summary>Inserts a non-empty raw record without partially modifying the page on failure.</summary>
     public bool TryInsert(ReadOnlySpan<byte> row, out SlotId slotId, out SlotGeneration generation)
     {

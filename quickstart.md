@@ -44,11 +44,11 @@ Your repository `NuGet.config` can then contain only the source URL:
 
 ## 2. Install the package
 
-Replace `1.0.0` with a version published by the release workflow:
+Install the sampling-capable contract release (or a later compatible version):
 
 ```bash
 dotnet add package SqlStorageEngine \
-  --version 1.0.0 \
+  --version 1.5.0 \
   --source "https://nuget.pkg.github.com/callummarshall9/index.json"
 ```
 
@@ -90,6 +90,27 @@ StoredRow? row = await users.GetAsync(rowId);
 IStorageIndex usersById = await storage.OpenIndexAsync(index.Id);
 IReadOnlyList<Identifiers.RowId> matches = await usersById.FindAsync([SqlValue.Integer(42)]);
 ```
+
+Native `SYSTEM` table sampling selects complete heap pages. Percent and approximate-row forms are distinct typed
+contracts; a repeatable seed reproduces the same selection while the heap layout is unchanged:
+
+```csharp
+await foreach (StoredRow sampled in users.SampleAsync(
+    new StoragePercentTableSample(10m, repeatableSeed: 42)))
+{
+    Console.WriteLine(sampled.RowId);
+}
+
+await foreach (StoredRow sampled in users.SampleAsync(
+    new StorageRowsTableSample(1_000, repeatableSeed: 42)))
+{
+    Console.WriteLine(sampled.RowId);
+}
+```
+
+Because sampling is page-granular, a rows sample is approximate and can return more or fewer rows than requested.
+Omitting the seed produces a fresh selection for each enumeration. Both sample forms retain scan cancellation, early
+disposal, statement coordination, masking, corruption detection, and row-decoding behavior.
 
 Database-scoped SQL Server types are created before tables that reference them:
 

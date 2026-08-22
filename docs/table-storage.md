@@ -7,3 +7,9 @@ Insertion validates the complete row before allocation, writes required overflow
 Partial update retains the previous encoded row and its overflow ownership until the replacement is complete. An in-place update replaces only index keys whose logical values changed. If the heap requires relocation, every index entry is rewritten with the new `RowId`, including indexes whose key bytes did not change, before the old slot is deleted. Failure reverses index changes, restores the old heap bytes or deletes the unpublished relocated row, and frees newly allocated overflow chains.
 
 Deletion first reads the logical row and its owned overflow references, removes every derived index entry, and only then invalidates the heap slot and advances its generation. Any failure before heap deletion restores already removed index entries and throws with cleanup details. Overflow chains are reclaimed after logical deletion; a failure there is returned in `DeferredCleanupPageIds`, so deletion is never silently reported as fully reclaimed.
+
+The public `IStorageTable.SampleAsync` boundary accepts either `StoragePercentTableSample` or
+`StorageRowsTableSample`. `TableStorage` delegates selection to the heap before decoding selected rows and projecting
+the current column set. The engine wrapper holds the same statement gate used by ordinary scans, applies optional
+`StorageReadOptions` masking after decoding, and releases the gate on completion, cancellation, error, or early consumer
+disposal. Sampling is read-only and does not change row identities, heap state, catalog metadata, or indexes.

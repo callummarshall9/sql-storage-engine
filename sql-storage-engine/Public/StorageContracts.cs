@@ -93,6 +93,50 @@ public sealed record StorageIndexEntry
     public IReadOnlyDictionary<ColumnId, SqlValue> IncludedValues => _includedValues;
 }
 
+/// <summary>
+/// Describes a native SYSTEM table sample. A repeatable seed makes page selection stable while the heap layout is
+/// unchanged; omitting it requests a fresh selection for each enumeration.
+/// </summary>
+public abstract record StorageTableSample
+{
+    protected StorageTableSample(long? repeatableSeed)
+    {
+        if (repeatableSeed is < 0)
+            throw new ArgumentOutOfRangeException(nameof(repeatableSeed), "A repeatable seed cannot be negative.");
+        RepeatableSeed = repeatableSeed;
+    }
+
+    public long? RepeatableSeed { get; }
+}
+
+/// <summary>Selects each heap page with the requested percentage probability.</summary>
+public sealed record StoragePercentTableSample : StorageTableSample
+{
+    public StoragePercentTableSample(decimal percentage, long? repeatableSeed = null) : base(repeatableSeed)
+    {
+        if (percentage is < 0 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(percentage), "A sample percentage must be from 0 through 100.");
+        Percentage = percentage;
+    }
+
+    public decimal Percentage { get; }
+}
+
+/// <summary>
+/// Selects heap pages using a probability derived from the requested approximate row count and the current live count.
+/// Page granularity means the result cardinality can be above or below the requested count.
+/// </summary>
+public sealed record StorageRowsTableSample : StorageTableSample
+{
+    public StorageRowsTableSample(long rowCount, long? repeatableSeed = null) : base(repeatableSeed)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(rowCount);
+        RowCount = rowCount;
+    }
+
+    public long RowCount { get; }
+}
+
 /// <summary>Options controlling the storage engine's bounded in-memory resources.</summary>
 public sealed record StorageEngineOptions
 {
@@ -152,6 +196,10 @@ public interface IStorageTable
         CancellationToken cancellationToken = default);
     IAsyncEnumerable<StoredRow> ScanAsync(CancellationToken cancellationToken = default);
     IAsyncEnumerable<StoredRow> ScanAsync(StorageReadOptions readOptions,
+        CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
+        CancellationToken cancellationToken = default);
+    IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample, StorageReadOptions readOptions,
         CancellationToken cancellationToken = default);
     ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
         CancellationToken cancellationToken = default);

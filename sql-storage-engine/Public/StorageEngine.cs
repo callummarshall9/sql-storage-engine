@@ -458,6 +458,24 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             await foreach (var stored in storage.ScanAsync(cancellationToken).ConfigureAwait(false))
                 yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
         }
+        public async IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            ArgumentNullException.ThrowIfNull(sample);
+            await foreach (var stored in storage.SampleAsync(sample, cancellationToken).ConfigureAwait(false))
+                yield return stored;
+        }
+        public async IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
+            StorageReadOptions readOptions,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
+            ArgumentNullException.ThrowIfNull(sample);
+            ArgumentNullException.ThrowIfNull(readOptions);
+            await foreach (var stored in storage.SampleAsync(sample, cancellationToken).ConfigureAwait(false))
+                yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
+        }
         public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update, CancellationToken cancellationToken = default)
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
