@@ -5,6 +5,7 @@ using sql_storage_engine.Indexes;
 using sql_storage_engine.Overflow;
 using sql_storage_engine.Pages;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Storage;
 using sql_storage_engine.Tables;
 using sql_storage_engine.Transactions;
 
@@ -850,6 +851,16 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                 definition.SpecializedOptions!.SpatialSrid is { } requiredSrid &&
                 ((SpatialSqlValue)query).Value.Srid != requiredSrid)
                 throw new ArgumentException($"Spatial index '{definition.Name}' requires SRID {requiredSrid}.", nameof(query));
+            if (definition.Method == CatalogIndexMethod.Vector &&
+                query is VectorSqlValue queryVector &&
+                !double.IsFinite(queryVector.DistanceTo(
+                    queryVector,
+                    definition.SpecializedOptions!.VectorMetric!.Value)))
+            {
+                throw new ArgumentException(
+                    $"Vector index '{definition.Name}' cannot search with a zero vector for cosine distance.",
+                    nameof(query));
+            }
             var columnPosition = sourceColumn.position;
             var storage = await owner.OpenTableStorageAsync(table.Id, cancellationToken).ConfigureAwait(false);
             List<SpecializedIndexMatch> matches = [];
@@ -866,7 +877,12 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                         requested.DistanceTo(candidate, definition.SpecializedOptions!.VectorMetric!.Value),
                     _ => throw new ArgumentException("Query value does not match the specialized index type.", nameof(query))
                 };
-                if (!double.IsFinite(distance)) continue;
+                if (!double.IsFinite(distance))
+                {
+                    if (definition.Method == CatalogIndexMethod.Vector)
+                        throw new NonFiniteVectorDistanceException(definition.Name, entry.RowId);
+                    continue;
+                }
                 matches.Add(new SpecializedIndexMatch(entry.RowId, distance));
             }
             return matches.OrderBy(match => match.Distance).ThenBy(match => match.RowId.PageId.Value)

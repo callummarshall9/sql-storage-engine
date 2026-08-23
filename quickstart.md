@@ -164,7 +164,8 @@ Typed XML collections are registered with `CreateXmlSchemaCollectionAsync` befor
 `SqlType.TypedXml`; they can later be extended or dropped when dependency-free. CLR assemblies are cataloged with
 `CreateAssemblyAsync`, and trusted executable behavior is bound through `ISqlClrTypeRuntime`. JSON-path, namespace-bound
 XML, spatial, and vector indexes use `CreateSpecializedIndexAsync`; opened indexes expose JSON value/existence and XML
-path/value seeks in addition to whole-value lookup. The full coverage and normalization matrix is in
+path/value seeks in addition to whole-value lookup. Cosine vector indexes reject zero vectors during build and mutation,
+and cosine nearest queries reject a zero query rather than silently dropping non-finite distances. The full coverage and normalization matrix is in
 [SQL Server 2025 data-type coverage](docs/sql-server-data-types.md).
 
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an

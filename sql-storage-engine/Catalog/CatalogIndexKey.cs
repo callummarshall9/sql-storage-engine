@@ -36,6 +36,17 @@ public static class CatalogIndexKey
                     nameof(row));
             }
         }
+        if (index.Method == CatalogIndexMethod.Vector &&
+            index.SpecializedOptions!.VectorMetric == SqlVectorDistanceMetric.Cosine)
+        {
+            var vectorValue = SourceValue(row, table, index);
+            if (!vectorValue.IsNull && ((VectorSqlValue)vectorValue).Values.All(component => component == 0f))
+            {
+                throw new ArgumentException(
+                    $"Cosine vector index '{index.Name}' cannot contain a zero vector.",
+                    nameof(row));
+            }
+        }
         var documentKey = Encode(row, table, index);
         if (index.Method is not (CatalogIndexMethod.Json or CatalogIndexMethod.Xml)) return [documentKey];
         var value = SourceValue(row, table, index);

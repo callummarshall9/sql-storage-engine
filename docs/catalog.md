@@ -15,6 +15,10 @@ Spatial indexes may optionally declare one exact admitted SRID. An exact-SRID in
 with that SRID, while the parameterless spatial-index option retains the existing all-SRID behavior. The immutable option
 is persisted so query planners can reject incompatible nearest-search access before opening the index.
 
+Cosine vector indexes admit only non-NULL vectors with a nonzero norm, and cosine nearest queries likewise require a
+nonzero query vector. This makes the persisted metric a usable exact-error capability for query planners. A legacy index
+containing a zero vector raises `NonFiniteVectorDistanceException` instead of silently omitting that candidate.
+
 ## Bootstrap binary format
 
 Catalog format version 9 starts with the four bytes `43 41 54 39` (`CAT9`), a little-endian 16-bit version, two zero reserved bytes, and 32-bit table, index, scalar-type, table-type, XML-collection, and assembly counts. XML collections and assemblies precede table/index/type records so typed XML and CLR declarations resolve shared identities while decoding. Table records encode database and schema before object name and end with optional system-versioning metadata. Versions 6 and 7 remain readable, and version 8 catalogs decode spatial indexes with the all-SRID policy used by that release. The next catalog publication upgrades an older form to version 9. Typed XML type records store only collection identity. Index records retain B-tree, JSON-path, namespace-bound XML, spatial SRID, or vector method metadata. An exact-SRID spatial index rejects incompatible non-NULL values during build and mutation, so its published SRID is a table-value capability rather than a lossy row filter.
