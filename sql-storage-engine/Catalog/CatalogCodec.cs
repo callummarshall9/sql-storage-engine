@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 8;
-    public const uint Magic = 0x38544143; // "CAT8" in persisted little-endian byte order.
+    public const ushort FormatVersion = 9;
+    public const uint Magic = 0x39544143; // "CAT9" in persisted little-endian byte order.
+    private const uint Version8Magic = 0x38544143;
     private const uint Version7Magic = 0x37544143;
     private const uint Version6Magic = 0x36544143;
     public const int HeaderLength = 32;
@@ -101,6 +102,11 @@ public static class CatalogCodec
             WriteUInt16(output, checked((ushort)(index.SpecializedOptions?.JsonPaths.Count ?? 0)));
             foreach (var path in index.SpecializedOptions?.JsonPaths ?? []) WriteString(output, path);
             WriteByte(output, index.SpecializedOptions?.VectorMetric is null ? (byte)0 : (byte)index.SpecializedOptions.VectorMetric.Value);
+            if (index.Method == CatalogIndexMethod.Spatial)
+            {
+                WriteByte(output, index.SpecializedOptions?.SpatialSrid is null ? (byte)0 : (byte)1);
+                if (index.SpecializedOptions?.SpatialSrid is { } spatialSrid) WriteInt32(output, spatialSrid);
+            }
             WriteByte(output, index.SpecializedOptions?.XmlIndexKind is null ? (byte)0 : (byte)index.SpecializedOptions.XmlIndexKind.Value);
             WriteUInt16(output, checked((ushort)(index.SpecializedOptions?.XmlNamespaces.Count ?? 0)));
             foreach (var binding in (index.SpecializedOptions?.XmlNamespaces ??
@@ -147,11 +153,12 @@ public static class CatalogCodec
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version7Magic or Version6Magic))
+        if (magic is not (Magic or Version8Magic or Version7Magic or Version6Magic))
             throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or 7 or FormatVersion) || version == 6 && magic != Version6Magic ||
-            version == 7 && magic != Version7Magic || version == FormatVersion && magic != Magic)
+        if (version is not (6 or 7 or 8 or FormatVersion) || version == 6 && magic != Version6Magic ||
+            version == 7 && magic != Version7Magic || version == 8 && magic != Version8Magic ||
+            version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();
@@ -241,6 +248,16 @@ public static class CatalogCodec
             var jsonPaths = new string[jsonPathCount];
             for (var pathNumber = 0; pathNumber < jsonPaths.Length; pathNumber++) jsonPaths[pathNumber] = reader.String();
             var rawMetric = reader.Byte();
+            int? spatialSrid = null;
+            if (version >= 9 && method == CatalogIndexMethod.Spatial)
+            {
+                spatialSrid = reader.Byte() switch
+                {
+                    0 => null,
+                    1 => reader.Int32(),
+                    _ => throw new StorageFormatException("Invalid spatial-index SRID marker.")
+                };
+            }
             var rawXmlKind = reader.Byte();
             var xmlNamespaceCount = reader.UInt16();
             var xmlNamespaces = new Dictionary<string, string>(xmlNamespaceCount, StringComparer.Ordinal);
@@ -253,12 +270,13 @@ public static class CatalogCodec
             for (var includedNumber = 0; includedNumber < included.Length; includedNumber++) included[includedNumber] = new ColumnId(reader.UInt64());
             CatalogSpecializedIndexOptions? options = method switch
             {
-                CatalogIndexMethod.BTree when jsonPaths.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 => null,
-                CatalogIndexMethod.Json when rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CatalogSpecializedIndexOptions.Json(jsonPaths),
-                CatalogIndexMethod.Spatial when jsonPaths.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CatalogSpecializedIndexOptions.Spatial(),
-                CatalogIndexMethod.Vector when jsonPaths.Length == 0 && rawMetric != 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
+                CatalogIndexMethod.BTree when jsonPaths.Length == 0 && rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => null,
+                CatalogIndexMethod.Json when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CatalogSpecializedIndexOptions.Json(jsonPaths),
+                CatalogIndexMethod.Spatial when jsonPaths.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
+                    spatialSrid is { } exactSrid ? CatalogSpecializedIndexOptions.Spatial(exactSrid) : CatalogSpecializedIndexOptions.Spatial(),
+                CatalogIndexMethod.Vector when jsonPaths.Length == 0 && rawMetric != 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
                     CatalogSpecializedIndexOptions.Vector((SqlVectorDistanceMetric)rawMetric),
-                CatalogIndexMethod.Xml when rawMetric == 0 && rawXmlKind != 0 =>
+                CatalogIndexMethod.Xml when rawMetric == 0 && spatialSrid is null && rawXmlKind != 0 =>
                     CatalogSpecializedIndexOptions.Xml((CatalogXmlIndexKind)rawXmlKind, xmlNamespaces, jsonPaths),
                 _ => throw new StorageFormatException("Invalid specialized-index options.")
             };

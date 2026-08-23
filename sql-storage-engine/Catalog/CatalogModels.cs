@@ -68,19 +68,24 @@ public sealed record CatalogSpecializedIndexOptions
 {
     private CatalogSpecializedIndexOptions(CatalogIndexMethod method, IReadOnlyList<string>? jsonPaths = null,
         SqlVectorDistanceMetric? vectorMetric = null, CatalogXmlIndexKind? xmlIndexKind = null,
-        IReadOnlyDictionary<string, string>? xmlNamespaces = null)
+        IReadOnlyDictionary<string, string>? xmlNamespaces = null, int? spatialSrid = null)
     {
         Method = method;
         JsonPaths = jsonPaths ?? Array.Empty<string>();
         VectorMetric = vectorMetric;
         XmlIndexKind = xmlIndexKind;
         XmlNamespaces = xmlNamespaces ?? new Dictionary<string, string>(StringComparer.Ordinal);
+        SpatialSrid = spatialSrid;
     }
     public CatalogIndexMethod Method { get; }
     public IReadOnlyList<string> JsonPaths { get; }
     public SqlVectorDistanceMetric? VectorMetric { get; }
     public CatalogXmlIndexKind? XmlIndexKind { get; }
     public IReadOnlyDictionary<string, string> XmlNamespaces { get; }
+    /// <summary>
+    /// Gets the exact SRID admitted by a spatial index, or <see langword="null"/> when the index admits every SRID.
+    /// </summary>
+    public int? SpatialSrid { get; }
     public static CatalogSpecializedIndexOptions Json(params string[] paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -157,6 +162,8 @@ public sealed record CatalogSpecializedIndexOptions
         }
     }
     public static CatalogSpecializedIndexOptions Spatial() => new(CatalogIndexMethod.Spatial);
+    public static CatalogSpecializedIndexOptions Spatial(int srid) =>
+        new(CatalogIndexMethod.Spatial, spatialSrid: srid);
     public static CatalogSpecializedIndexOptions Vector(SqlVectorDistanceMetric metric = SqlVectorDistanceMetric.Cosine)
     { if (!Enum.IsDefined(metric)) throw new ArgumentOutOfRangeException(nameof(metric)); return new(CatalogIndexMethod.Vector, vectorMetric: metric); }
     public static CatalogSpecializedIndexOptions Xml(CatalogXmlIndexKind kind = CatalogXmlIndexKind.Primary,

@@ -28,13 +28,15 @@ public sealed class CatalogCodecTests
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
         Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
-            .Should().Be("t54qdXyll74nM//UNn520+SdJz8s6tfgDCZNoAS4ZNE=");
+            .Should().Be("xVv+/J+SamhOV4gEUC2DyyPk+sFp5DK011DIeaAhZMI=");
     }
 
     [Test]
     public void Version7CatalogWithoutTemporalMetadataRemainsReadable()
     {
         var version8 = CatalogCodec.Encode(Sample());
+        BinaryPrimitives.WriteUInt32LittleEndian(version8, 0x38544143);
+        BinaryPrimitives.WriteUInt16LittleEndian(version8.AsSpan(4), 8);
         const int indexRecordLength = 58;
         var temporalMarkerOffset = version8.Length - indexRecordLength - 1;
         var version7 = version8[..temporalMarkerOffset].Concat(version8[(temporalMarkerOffset + 1)..]).ToArray();
@@ -45,6 +47,34 @@ public sealed class CatalogCodecTests
 
         decoded.Tables.Single().SystemVersioning.Should().BeNull();
         decoded.Tables.Single().QualifiedName.Should().Be(Sample().Tables.Single().QualifiedName);
+    }
+
+    [Test]
+    public void Version8SpatialIndexesRemainReadableWithAllSridCompatibility()
+    {
+        var table = new CatalogTable(new TableId(1), "places", 1, new PageId(2), [
+            new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false),
+            new CatalogColumn(new ColumnId(2), "point", SqlType.Geometry, true)
+        ]);
+        var catalog = new CatalogDefinition([table], [
+            new CatalogIndex(new IndexId(1), "pk", table.Id, new PageId(3), true,
+                [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First)],
+                storageKind: CatalogIndexStorageKind.Clustered, isPrimaryKey: true),
+            new CatalogIndex(new IndexId(2), "spatial", table.Id, new PageId(4), false,
+                [new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First)],
+                CatalogSpecializedIndexOptions.Spatial())
+        ]);
+        var version9 = CatalogCodec.Encode(catalog);
+        var spatialSridMarkerOffset = version9.Length - 10;
+        var version8 = version9[..spatialSridMarkerOffset]
+            .Concat(version9[(spatialSridMarkerOffset + 1)..]).ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(version8, 0x38544143);
+        BinaryPrimitives.WriteUInt16LittleEndian(version8.AsSpan(4), 8);
+
+        var decoded = CatalogCodec.Decode(version8);
+
+        decoded.Indexes.Single(index => index.Method == CatalogIndexMethod.Spatial)
+            .SpecializedOptions!.SpatialSrid.Should().BeNull();
     }
 
     [Test]

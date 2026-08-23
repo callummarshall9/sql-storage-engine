@@ -846,6 +846,10 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                 .Single(item => item.column.Id == columnId);
             if (query.IsNull) throw new ArgumentException("Nearest-neighbor query values cannot be NULL.", nameof(query));
             sourceColumn.column.Type.Validate(query, "query");
+            if (definition.Method == CatalogIndexMethod.Spatial &&
+                definition.SpecializedOptions!.SpatialSrid is { } requiredSrid &&
+                ((SpatialSqlValue)query).Value.Srid != requiredSrid)
+                throw new ArgumentException($"Spatial index '{definition.Name}' requires SRID {requiredSrid}.", nameof(query));
             var columnPosition = sourceColumn.position;
             var storage = await owner.OpenTableStorageAsync(table.Id, cancellationToken).ConfigureAwait(false);
             List<SpecializedIndexMatch> matches = [];

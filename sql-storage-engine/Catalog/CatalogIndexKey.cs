@@ -23,6 +23,12 @@ public static class CatalogIndexKey
     /// <summary>Returns every durable tree entry represented by one row.</summary>
     public static IReadOnlyList<IndexKey> EncodeEntries(Row row, CatalogTable table, CatalogIndex index)
     {
+        if (index.Method == CatalogIndexMethod.Spatial &&
+            index.SpecializedOptions!.SpatialSrid is { } requiredSrid)
+        {
+            var spatialValue = SourceValue(row, table, index);
+            if (spatialValue.IsNull || ((SpatialSqlValue)spatialValue).Value.Srid != requiredSrid) return [];
+        }
         var documentKey = Encode(row, table, index);
         if (index.Method is not (CatalogIndexMethod.Json or CatalogIndexMethod.Xml)) return [documentKey];
         var value = SourceValue(row, table, index);

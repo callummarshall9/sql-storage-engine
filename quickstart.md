@@ -48,7 +48,7 @@ Install the sampling- and temporal-capable contract release (or a later compatib
 
 ```bash
 dotnet add package SqlStorageEngine \
-  --version 1.6.0 \
+  --version 1.7.0 \
   --source "https://nuget.pkg.github.com/callummarshall9/index.json"
 ```
 
