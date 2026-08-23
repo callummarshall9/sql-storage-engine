@@ -27,7 +27,14 @@ public static class CatalogIndexKey
             index.SpecializedOptions!.SpatialSrid is { } requiredSrid)
         {
             var spatialValue = SourceValue(row, table, index);
-            if (spatialValue.IsNull || ((SpatialSqlValue)spatialValue).Value.Srid != requiredSrid) return [];
+            if (spatialValue.IsNull) return [];
+            var actualSrid = ((SpatialSqlValue)spatialValue).Value.Srid;
+            if (actualSrid != requiredSrid)
+            {
+                throw new ArgumentException(
+                    $"Spatial index '{index.Name}' requires SRID {requiredSrid}; the row contains SRID {actualSrid}.",
+                    nameof(row));
+            }
         }
         var documentKey = Encode(row, table, index);
         if (index.Method is not (CatalogIndexMethod.Json or CatalogIndexMethod.Xml)) return [documentKey];

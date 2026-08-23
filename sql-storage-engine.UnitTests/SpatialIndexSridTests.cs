@@ -2,6 +2,8 @@ using AwesomeAssertions;
 using sql_storage_engine.Catalog;
 using sql_storage_engine.Identifiers;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Storage;
+using sql_storage_engine.Tables;
 
 namespace sql_storage_engine.UnitTests;
 
@@ -15,7 +17,7 @@ public sealed class SpatialIndexSridTests
     }
 
     [Test]
-    public async Task ExactSridIndexFiltersRowsRejectsWrongQueriesAndPersistsCapability()
+    public async Task ExactSridIndexRejectsIncompatibleRowsAndQueriesAndPersistsCapability()
     {
         var path = Path.Combine(Path.GetTempPath(), $"spatial-srid-{Guid.NewGuid():N}.db");
         try
@@ -38,26 +40,35 @@ public sealed class SpatialIndexSridTests
                 await engine.CreateIndexAsync("places_pk", table.Id, true,
                     [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First)],
                     new CatalogBTreeIndexOptions(CatalogIndexStorageKind.Clustered, isPrimaryKey: true));
+                var buildFailure = await ((Func<Task>)(async () =>
+                        await engine.CreateSpecializedIndexAsync("places_spatial_4326", table.Id,
+                            new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First),
+                            CatalogSpecializedIndexOptions.Spatial(4326))))
+                    .Should().ThrowAsync<IndexBuildException>();
+                buildFailure.Which.InnerException.Should().BeOfType<ArgumentException>()
+                    .Which.ParamName.Should().Be("row");
+                await storage.UpdateAsync(otherRowId, new RowUpdate([
+                    new ColumnUpdate(1, SqlValue.Geometry("POINT (2 2)", 4326))
+                ]));
                 var definition = await engine.CreateSpecializedIndexAsync("places_spatial_4326", table.Id,
                     new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First),
                     CatalogSpecializedIndexOptions.Spatial(4326));
                 var index = await engine.OpenIndexAsync(definition.Id);
 
                 definition.SpecializedOptions!.SpatialSrid.Should().Be(4326);
-                (await index.FindAsync([SqlValue.Geometry("POINT (0 0)", 0)]))
-                    .Should().BeEmpty();
                 (await index.SearchNearestAsync(SqlValue.Geometry("POINT (0 0)", 4326), 5))
-                    .Select(match => match.RowId).Should().Equal(matchingRowId);
+                    .Select(match => match.RowId).Should().Equal(matchingRowId, otherRowId);
                 await ((Func<Task>)(async () =>
                         await index.SearchNearestAsync(SqlValue.Geometry("POINT (0 0)", 0), 1)))
                     .Should().ThrowAsync<ArgumentException>()
                     .WithParameterName("query");
 
-                await storage.UpdateAsync(otherRowId, new RowUpdate([
-                    new ColumnUpdate(1, SqlValue.Geometry("POINT (2 2)", 4326))
-                ]));
-                (await index.SearchNearestAsync(SqlValue.Geometry("POINT (0 0)", 4326), 5))
-                    .Select(match => match.RowId).Should().Equal(matchingRowId, otherRowId);
+                var insertionFailure = await ((Func<Task>)(async () => await storage.InsertAsync(new Row([
+                        SqlValue.Integer(4), SqlValue.Geometry("POINT (3 3)", 0)
+                    ]))))
+                    .Should().ThrowAsync<TableMutationException>();
+                insertionFailure.Which.InnerException.Should().BeOfType<ArgumentException>()
+                    .Which.ParamName.Should().Be("row");
             }
 
             await using var reopened = await StorageEngine.OpenAsync(path);
