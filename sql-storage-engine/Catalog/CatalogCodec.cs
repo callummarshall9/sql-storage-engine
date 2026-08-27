@@ -185,8 +185,11 @@ public static class CatalogCodec
         {
             var name = reader.String(); var versionText = reader.String(); var culture = reader.String(); var token = reader.String();
             var permission = (CatalogAssemblyPermissionSet)reader.Byte(); var image = reader.Bytes();
-            try { assemblies.Add(new CatalogAssembly(name, image, EmptyToNull(versionText), EmptyToNull(culture),
-                EmptyToNull(token), permission)); }
+            try
+            {
+                assemblies.Add(new CatalogAssembly(name, image, EmptyToNull(versionText), EmptyToNull(culture),
+                EmptyToNull(token), permission));
+            }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid CLR assembly record.", exception); }
         }
         List<CatalogTable> tables = new(tableCount);
@@ -214,13 +217,19 @@ public static class CatalogCodec
                 var historyTableId = new TableId(reader.UInt64());
                 var periodStartColumnId = new ColumnId(reader.UInt64());
                 var periodEndColumnId = new ColumnId(reader.UInt64());
-                try { systemVersioning = new CatalogSystemVersioning(
-                    historyTableId, periodStartColumnId, periodEndColumnId); }
+                try
+                {
+                    systemVersioning = new CatalogSystemVersioning(
+                    historyTableId, periodStartColumnId, periodEndColumnId);
+                }
                 catch (ArgumentException exception)
                 { throw new StorageFormatException("Invalid system-versioning metadata.", exception); }
             }
-            try { tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
-                databaseName, schemaName, systemVersioning)); }
+            try
+            {
+                tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
+                databaseName, schemaName, systemVersioning));
+            }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog table record.", exception); }
         }
         List<CatalogIndex> indexes = new(indexCount);
@@ -242,8 +251,11 @@ public static class CatalogCodec
                 var direction = (SortDirection)reader.Byte();
                 var nullOrder = (NullSortOrder)reader.Byte();
                 var collation = reader.String();
-                try { columns.Add(new CatalogIndexedColumn(columnId, direction, nullOrder,
-                    collation.Length == 0 ? null : collation)); }
+                try
+                {
+                    columns.Add(new CatalogIndexedColumn(columnId, direction, nullOrder,
+                    collation.Length == 0 ? null : collation));
+                }
                 catch (ArgumentException exception) { throw new StorageFormatException("Invalid indexed-column record.", exception); }
             }
             var specializedValueCount = reader.UInt16();
@@ -285,8 +297,11 @@ public static class CatalogCodec
                     xmlNamespaces.Count == 0 => DecodeFullTextOptions(specializedValues),
                 _ => throw new StorageFormatException("Invalid specialized-index options.")
             };
-            try { indexes.Add(new CatalogIndex(id, name, tableId, root, unique, columns, options,
-                storageKind, primary, included, ignoreDuplicate)); }
+            try
+            {
+                indexes.Add(new CatalogIndex(id, name, tableId, root, unique, columns, options,
+                storageKind, primary, included, ignoreDuplicate));
+            }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog index record.", exception); }
         }
         List<CatalogScalarType> scalarTypes = new(scalarTypeCount);
@@ -324,8 +339,11 @@ public static class CatalogCodec
                 for (var includeNumber = 0; includeNumber < included.Length; includeNumber++) included[includeNumber] = new ColumnId(reader.UInt64());
                 var rawBucketCount = reader.UInt64();
                 long? bucketCount = rawBucketCount == 0 ? null : checked((long)rawBucketCount);
-                try { typeIndexes.Add(new CatalogTableTypeIndex(indexName, primary, unique, indexedColumns,
-                    storageKind, included, ignoreDuplicateKey, bucketCount)); }
+                try
+                {
+                    typeIndexes.Add(new CatalogTableTypeIndex(indexName, primary, unique, indexedColumns,
+                    storageKind, included, ignoreDuplicateKey, bucketCount));
+                }
                 catch (ArgumentException exception) { throw new StorageFormatException("Invalid table-type index record.", exception); }
             }
             var checkCount = reader.Count();
@@ -510,9 +528,12 @@ public static class CatalogCodec
                 encryptionKey ?? throw new StorageFormatException("Encrypted column has no key."),
                 (CatalogEncryptionType)rawEncryption,
                 encryptionAlgorithm ?? throw new StorageFormatException("Encrypted column has no algorithm."));
-            try { return new CatalogColumn(id, name, type, nullable, EmptyToNull(defaultExpression), identity,
+            try
+            {
+                return new CatalogColumn(id, name, type, nullable, EmptyToNull(defaultExpression), identity,
                 rowGuid, EmptyToNull(computedExpression), computedPersisted, sparse, columnSet, fileStream,
-                masking, encryption, generated, hidden); }
+                masking, encryption, generated, hidden);
+            }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog column record.", exception); }
         }
         public CatalogIndexedColumn IndexedColumn()

@@ -99,8 +99,8 @@ public sealed record CatalogSpecializedIndexOptions
         foreach (var path in paths) ValidateJsonPath(path);
         CatalogTable.ValidateUnique(paths, "JSON paths", nameof(paths), StringComparer.Ordinal);
         for (var left = 0; left < paths.Length; left++) for (var right = left + 1; right < paths.Length; right++)
-            if (PathsOverlap(paths[left], paths[right]))
-                throw new ArgumentException("JSON index paths cannot overlap.", nameof(paths));
+                if (PathsOverlap(paths[left], paths[right]))
+                    throw new ArgumentException("JSON index paths cannot overlap.", nameof(paths));
         return new(CatalogIndexMethod.Json, Array.AsReadOnly(paths.ToArray()));
     }
     private static bool PathsOverlap(string left, string right) => IsAncestor(left, right) || IsAncestor(right, left);

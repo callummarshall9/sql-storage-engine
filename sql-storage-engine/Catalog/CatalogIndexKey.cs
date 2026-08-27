@@ -276,33 +276,34 @@ public static class CatalogIndexKey
                         RowCodec.EncodeLogicalValue(value, logicalColumn)));
                 }
                 else
-                switch (value)
-                {
-                    case BooleanSqlValue boolean: WriteByte(segment, boolean.Value ? (byte)1 : (byte)0); break;
-                    case IntegerSqlValue integer:
-                        var integerBytes = new byte[8];
-                        BinaryPrimitives.WriteUInt64BigEndian(integerBytes, unchecked((ulong)integer.Value) ^ 0x8000000000000000UL);
-                        Write(segment, integerBytes);
-                        break;
-                    case TextSqlValue text: WriteEscapedBytes(segment, GetTextSortKey(text.Value, column.Type,
-                        indexed.Collation)); break;
-                    case BinarySqlValue binary: WriteEscapedBytes(segment, binary.Value.Span); break;
-                    case HierarchyIdSqlValue hierarchy: WriteEscapedBytes(segment, hierarchy.Value.GetSortKey()); break;
-                    case DecimalSqlValue exact: WriteDecimal(segment, exact.Value); break;
-                    case FloatSqlValue approximate: WriteSortableDouble(segment, approximate.Value); break;
-                    case DateSqlValue date: WriteSortableInt64(segment, date.Value.DayNumber); break;
-                    case TimeSqlValue time: WriteSortableInt64(segment, time.Value.Ticks); break;
-                    case DateTimeSqlValue dateTime: WriteSortableInt64(segment, dateTime.Value.Ticks); break;
-                    case DateTimeOffsetSqlValue dateTimeOffset: WriteSortableInt64(segment, dateTimeOffset.Value.UtcTicks); break;
-                    case UniqueIdentifierSqlValue identifier:
-                        WriteSqlGuid(segment, identifier.Value);
-                        break;
-                    case VariantSqlValue variant:
-                        WriteByte(segment, GetVariantFamilyOrder(variant.DeclaredType.Name));
-                        WriteVariant(segment, variant.Value, variant.DeclaredType);
-                        break;
-                    default: throw new ArgumentException("Unsupported indexed SQL value.", nameof(values));
-                }
+                    switch (value)
+                    {
+                        case BooleanSqlValue boolean: WriteByte(segment, boolean.Value ? (byte)1 : (byte)0); break;
+                        case IntegerSqlValue integer:
+                            var integerBytes = new byte[8];
+                            BinaryPrimitives.WriteUInt64BigEndian(integerBytes, unchecked((ulong)integer.Value) ^ 0x8000000000000000UL);
+                            Write(segment, integerBytes);
+                            break;
+                        case TextSqlValue text:
+                            WriteEscapedBytes(segment, GetTextSortKey(text.Value, column.Type,
+                            indexed.Collation)); break;
+                        case BinarySqlValue binary: WriteEscapedBytes(segment, binary.Value.Span); break;
+                        case HierarchyIdSqlValue hierarchy: WriteEscapedBytes(segment, hierarchy.Value.GetSortKey()); break;
+                        case DecimalSqlValue exact: WriteDecimal(segment, exact.Value); break;
+                        case FloatSqlValue approximate: WriteSortableDouble(segment, approximate.Value); break;
+                        case DateSqlValue date: WriteSortableInt64(segment, date.Value.DayNumber); break;
+                        case TimeSqlValue time: WriteSortableInt64(segment, time.Value.Ticks); break;
+                        case DateTimeSqlValue dateTime: WriteSortableInt64(segment, dateTime.Value.Ticks); break;
+                        case DateTimeOffsetSqlValue dateTimeOffset: WriteSortableInt64(segment, dateTimeOffset.Value.UtcTicks); break;
+                        case UniqueIdentifierSqlValue identifier:
+                            WriteSqlGuid(segment, identifier.Value);
+                            break;
+                        case VariantSqlValue variant:
+                            WriteByte(segment, GetVariantFamilyOrder(variant.DeclaredType.Name));
+                            WriteVariant(segment, variant.Value, variant.DeclaredType);
+                            break;
+                        default: throw new ArgumentException("Unsupported indexed SQL value.", nameof(values));
+                    }
             }
             var encodedSegment = segment.WrittenSpan.ToArray();
             if (indexed.Direction == SortDirection.Descending)
