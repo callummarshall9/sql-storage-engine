@@ -23,6 +23,17 @@ public static class CatalogIndexKey
     /// <summary>Returns every durable tree entry represented by one row.</summary>
     public static IReadOnlyList<IndexKey> EncodeEntries(Row row, CatalogTable table, CatalogIndex index)
     {
+        if (index.Method == CatalogIndexMethod.FullText)
+        {
+            var fullTextValue = SourceValue(row, table, index);
+            if (fullTextValue.IsNull) return [];
+            var options = index.SpecializedOptions!.FullTextOptions!;
+            return FullTextTokenizer.TokenizeDocument(((TextSqlValue)fullTextValue).Value, options)
+                .Select(token => EncodeFullTextToken(index, table, token))
+                .Distinct()
+                .OrderBy(key => key)
+                .ToArray();
+        }
         if (index.Method == CatalogIndexMethod.Spatial &&
             index.SpecializedOptions!.SpatialSrid is { } requiredSrid)
         {
@@ -127,6 +138,20 @@ public static class CatalogIndexKey
         if (index.Method != CatalogIndexMethod.Xml) throw new ArgumentException("Index is not an XML index.", nameof(index));
         ArgumentException.ThrowIfNullOrWhiteSpace(path); ValidateXmlLookupPath(index, path);
         return EncodeNamedPathExists(3, NormalizeXmlLookupPath(index, path));
+    }
+
+    public static IndexKey EncodeFullTextTerm(CatalogIndex index, CatalogTable table, FullTextSearchRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(index);
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(request);
+        if (index.Method != CatalogIndexMethod.FullText)
+            throw new ArgumentException("Index is not a full-text index.", nameof(index));
+        var options = index.SpecializedOptions!.FullTextOptions!;
+        if (!StringComparer.Ordinal.Equals(request.Language, options.Language))
+            throw new ArgumentException(
+                $"Full-text index '{index.Name}' requires language identity '{options.Language}'.", nameof(request));
+        return EncodeFullTextToken(index, table, FullTextTokenizer.ParseExactTerm(request.Term, options));
     }
     public static IndexKey Encode(Row row, CatalogTable table, CatalogIndex index)
     {
@@ -386,8 +411,23 @@ public static class CatalogIndexKey
                     }
                 }
                 break;
+            case CatalogIndexMethod.FullText:
+                throw new InvalidOperationException(
+                    "Whole-value lookup is unavailable for a full-text index; use SearchFullTextAsync.");
             default: throw new ArgumentException("Unknown specialized index method.", nameof(index));
         }
+        return new IndexKey(output.WrittenSpan);
+    }
+
+    private static IndexKey EncodeFullTextToken(CatalogIndex index, CatalogTable table, string token)
+    {
+        var column = table.Columns.Single(candidate => candidate.Id == index.Columns.Single().ColumnId);
+        var collation = column.Type.CollationMetadata ?? throw new ArgumentException(
+            "A full-text source column must have a collation.", nameof(table));
+        var unicode = column.Type.Name is SqlTypeName.NChar or SqlTypeName.NVarChar or SqlTypeName.NText;
+        var output = new ArrayBufferWriter<byte>();
+        WriteByte(output, 6);
+        WriteEscapedBytes(output, collation.GetSortKey(token, unicode));
         return new IndexKey(output.WrittenSpan);
     }
 

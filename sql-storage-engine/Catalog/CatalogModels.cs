@@ -28,7 +28,7 @@ public enum CatalogIndexStorageKind : byte
     Hash = 3
 }
 
-public enum CatalogIndexMethod : byte { BTree = 1, Json = 2, Spatial = 3, Vector = 4, Xml = 5 }
+public enum CatalogIndexMethod : byte { BTree = 1, Json = 2, Spatial = 3, Vector = 4, Xml = 5, FullText = 6 }
 public enum SqlVectorDistanceMetric : byte { Cosine = 1, Euclidean = 2, DotProduct = 3 }
 public enum CatalogXmlIndexKind : byte { Primary = 1, Path = 2, Value = 3, Property = 4, Selective = 5 }
 
@@ -68,7 +68,8 @@ public sealed record CatalogSpecializedIndexOptions
 {
     private CatalogSpecializedIndexOptions(CatalogIndexMethod method, IReadOnlyList<string>? jsonPaths = null,
         SqlVectorDistanceMetric? vectorMetric = null, CatalogXmlIndexKind? xmlIndexKind = null,
-        IReadOnlyDictionary<string, string>? xmlNamespaces = null, int? spatialSrid = null)
+        IReadOnlyDictionary<string, string>? xmlNamespaces = null, int? spatialSrid = null,
+        CatalogFullTextIndexOptions? fullTextOptions = null)
     {
         Method = method;
         JsonPaths = jsonPaths ?? Array.Empty<string>();
@@ -76,6 +77,7 @@ public sealed record CatalogSpecializedIndexOptions
         XmlIndexKind = xmlIndexKind;
         XmlNamespaces = xmlNamespaces ?? new Dictionary<string, string>(StringComparer.Ordinal);
         SpatialSrid = spatialSrid;
+        FullTextOptions = fullTextOptions;
     }
     public CatalogIndexMethod Method { get; }
     public IReadOnlyList<string> JsonPaths { get; }
@@ -86,6 +88,8 @@ public sealed record CatalogSpecializedIndexOptions
     /// Gets the exact SRID admitted by a spatial index, or <see langword="null"/> when the index admits every SRID.
     /// </summary>
     public int? SpatialSrid { get; }
+    /// <summary>Gets the complete linguistic and resource identity for a full-text index.</summary>
+    public CatalogFullTextIndexOptions? FullTextOptions { get; }
     public static CatalogSpecializedIndexOptions Json(params string[] paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
@@ -166,6 +170,8 @@ public sealed record CatalogSpecializedIndexOptions
         new(CatalogIndexMethod.Spatial, spatialSrid: srid);
     public static CatalogSpecializedIndexOptions Vector(SqlVectorDistanceMetric metric = SqlVectorDistanceMetric.Cosine)
     { if (!Enum.IsDefined(metric)) throw new ArgumentOutOfRangeException(nameof(metric)); return new(CatalogIndexMethod.Vector, vectorMetric: metric); }
+    public static CatalogSpecializedIndexOptions FullText(CatalogFullTextIndexOptions options)
+    { ArgumentNullException.ThrowIfNull(options); return new(CatalogIndexMethod.FullText, fullTextOptions: options); }
     public static CatalogSpecializedIndexOptions Xml(CatalogXmlIndexKind kind = CatalogXmlIndexKind.Primary,
         params string[] paths) => XmlCore(kind, null, paths);
 
@@ -1000,6 +1006,8 @@ public sealed class CatalogDefinition
                 if (column.IsComputed && index.Method == CatalogIndexMethod.Xml &&
                     index.SpecializedOptions!.XmlIndexKind is CatalogXmlIndexKind.Primary or CatalogXmlIndexKind.Selective)
                     throw new ArgumentException("A primary or selective XML index cannot be created on a computed XML column.", nameof(indexes));
+                if (column.IsComputed && index.Method == CatalogIndexMethod.FullText)
+                    throw new ArgumentException("A full-text index cannot be created on a computed column.", nameof(indexes));
                 var compatible = index.Method switch
                 {
                     CatalogIndexMethod.BTree => column.Type.CanBeBTreeKey,
@@ -1007,6 +1015,8 @@ public sealed class CatalogDefinition
                     CatalogIndexMethod.Spatial => column.Type.Name is SqlTypeName.Geometry or SqlTypeName.Geography,
                     CatalogIndexMethod.Vector => column.Type.Name == SqlTypeName.Vector,
                     CatalogIndexMethod.Xml => column.Type.Name == SqlTypeName.Xml,
+                    CatalogIndexMethod.FullText => column.Type.Name is SqlTypeName.Char or SqlTypeName.VarChar or
+                        SqlTypeName.Text or SqlTypeName.NChar or SqlTypeName.NVarChar or SqlTypeName.NText,
                     _ => false
                 };
                 if (!compatible)
@@ -1015,6 +1025,12 @@ public sealed class CatalogDefinition
                     throw new ArgumentException("Randomized encrypted columns cannot be index keys.", nameof(indexes));
                 if (column.IsSparse && (index.StorageKind == CatalogIndexStorageKind.Clustered || index.IsPrimaryKey))
                     throw new ArgumentException("A SPARSE column cannot be part of a clustered index or primary key.", nameof(indexes));
+                if (index.Method == CatalogIndexMethod.FullText &&
+                    !StringComparer.OrdinalIgnoreCase.Equals(column.Type.CollationMetadata?.Name,
+                        index.SpecializedOptions!.FullTextOptions!.Collation))
+                    throw new ArgumentException(
+                        $"Full-text index '{index.Name}' collation must exactly match its source column collation.",
+                        nameof(indexes));
             }
             var maximumKeyBytes = index.StorageKind == CatalogIndexStorageKind.Clustered
                 ? CatalogIndexKey.MaximumClusteredKeyBytes : CatalogIndexKey.MaximumNonClusteredKeyBytes;
@@ -1024,7 +1040,8 @@ public sealed class CatalogDefinition
                 throw new ArgumentException("The fixed-width portion of the composite index key exceeds the SQL Server index-kind limit.", nameof(indexes));
             if (index.IsPrimaryKey && index.Columns.Any(indexed => table.Columns.Single(column => column.Id == indexed.ColumnId).IsNullable))
                 throw new ArgumentException("Primary-key columns cannot be nullable.", nameof(indexes));
-            if (index.Method is CatalogIndexMethod.Json or CatalogIndexMethod.Spatial or CatalogIndexMethod.Vector or CatalogIndexMethod.Xml)
+            if (index.Method is CatalogIndexMethod.Json or CatalogIndexMethod.Spatial or CatalogIndexMethod.Vector or
+                CatalogIndexMethod.Xml or CatalogIndexMethod.FullText)
             {
                 var clusteringKey = _indexes.SingleOrDefault(candidate => candidate.TableId == table.Id &&
                     candidate.IsPrimaryKey && candidate.StorageKind == CatalogIndexStorageKind.Clustered);
@@ -1048,6 +1065,10 @@ public sealed class CatalogDefinition
         foreach (var group in _indexes.Where(index => index.Method == CatalogIndexMethod.Xml).GroupBy(index => index.TableId))
             if (group.Count() > 249)
                 throw new ArgumentException("A table can have at most 249 XML indexes.", nameof(indexes));
+        foreach (var group in _indexes.Where(index => index.Method == CatalogIndexMethod.FullText)
+                     .GroupBy(index => (index.TableId, index.Columns.Single().ColumnId)))
+            if (group.Count() > 1)
+                throw new ArgumentException("A textual column can have only one full-text index.", nameof(indexes));
         foreach (var group in _indexes.Where(index => index.Method == CatalogIndexMethod.Spatial)
                      .GroupBy(index => (index.TableId, index.Columns.Single().ColumnId)))
             if (group.Count() > 249)

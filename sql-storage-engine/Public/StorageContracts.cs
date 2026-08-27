@@ -296,6 +296,8 @@ public interface IStorageIndex
         CancellationToken cancellationToken = default);
     ValueTask<IReadOnlyList<RowId>> FindXmlPathAsync(string path, string? value = null,
         CancellationToken cancellationToken = default);
+    IAsyncEnumerable<FullTextIndexMatch> SearchFullTextAsync(FullTextSearchRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>The supported high-level boundary between a SQL engine and this storage package.</summary>

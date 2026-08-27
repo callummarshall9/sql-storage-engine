@@ -99,8 +99,10 @@ public static class CatalogCodec
                 WriteByte(output, (byte)column.NullSortOrder);
                 WriteString(output, column.Collation ?? string.Empty);
             }
-            WriteUInt16(output, checked((ushort)(index.SpecializedOptions?.JsonPaths.Count ?? 0)));
-            foreach (var path in index.SpecializedOptions?.JsonPaths ?? []) WriteString(output, path);
+            var specializedValues = index.SpecializedOptions?.FullTextOptions?.EncodeMetadata() ??
+                index.SpecializedOptions?.JsonPaths ?? [];
+            WriteUInt16(output, checked((ushort)specializedValues.Count));
+            foreach (var value in specializedValues) WriteString(output, value);
             WriteByte(output, index.SpecializedOptions?.VectorMetric is null ? (byte)0 : (byte)index.SpecializedOptions.VectorMetric.Value);
             if (index.Method == CatalogIndexMethod.Spatial)
             {
@@ -244,9 +246,10 @@ public static class CatalogCodec
                     collation.Length == 0 ? null : collation)); }
                 catch (ArgumentException exception) { throw new StorageFormatException("Invalid indexed-column record.", exception); }
             }
-            var jsonPathCount = reader.UInt16();
-            var jsonPaths = new string[jsonPathCount];
-            for (var pathNumber = 0; pathNumber < jsonPaths.Length; pathNumber++) jsonPaths[pathNumber] = reader.String();
+            var specializedValueCount = reader.UInt16();
+            var specializedValues = new string[specializedValueCount];
+            for (var valueNumber = 0; valueNumber < specializedValues.Length; valueNumber++)
+                specializedValues[valueNumber] = reader.String();
             var rawMetric = reader.Byte();
             int? spatialSrid = null;
             if (version >= 9 && method == CatalogIndexMethod.Spatial)
@@ -270,14 +273,16 @@ public static class CatalogCodec
             for (var includedNumber = 0; includedNumber < included.Length; includedNumber++) included[includedNumber] = new ColumnId(reader.UInt64());
             CatalogSpecializedIndexOptions? options = method switch
             {
-                CatalogIndexMethod.BTree when jsonPaths.Length == 0 && rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => null,
-                CatalogIndexMethod.Json when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CatalogSpecializedIndexOptions.Json(jsonPaths),
-                CatalogIndexMethod.Spatial when jsonPaths.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
+                CatalogIndexMethod.BTree when specializedValues.Length == 0 && rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => null,
+                CatalogIndexMethod.Json when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CatalogSpecializedIndexOptions.Json(specializedValues),
+                CatalogIndexMethod.Spatial when specializedValues.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
                     spatialSrid is { } exactSrid ? CatalogSpecializedIndexOptions.Spatial(exactSrid) : CatalogSpecializedIndexOptions.Spatial(),
-                CatalogIndexMethod.Vector when jsonPaths.Length == 0 && rawMetric != 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
+                CatalogIndexMethod.Vector when specializedValues.Length == 0 && rawMetric != 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 =>
                     CatalogSpecializedIndexOptions.Vector((SqlVectorDistanceMetric)rawMetric),
                 CatalogIndexMethod.Xml when rawMetric == 0 && spatialSrid is null && rawXmlKind != 0 =>
-                    CatalogSpecializedIndexOptions.Xml((CatalogXmlIndexKind)rawXmlKind, xmlNamespaces, jsonPaths),
+                    CatalogSpecializedIndexOptions.Xml((CatalogXmlIndexKind)rawXmlKind, xmlNamespaces, specializedValues),
+                CatalogIndexMethod.FullText when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 &&
+                    xmlNamespaces.Count == 0 => DecodeFullTextOptions(specializedValues),
                 _ => throw new StorageFormatException("Invalid specialized-index options.")
             };
             try { indexes.Add(new CatalogIndex(id, name, tableId, root, unique, columns, options,
@@ -339,6 +344,18 @@ public static class CatalogCodec
     private static void ValidateCount(int count, string parameterName)
     {
         if (count > MaximumRecordCount) throw new ArgumentException("Catalog record count exceeds the format limit.", parameterName);
+    }
+
+    private static CatalogSpecializedIndexOptions DecodeFullTextOptions(IReadOnlyList<string> values)
+    {
+        try
+        {
+            return CatalogSpecializedIndexOptions.FullText(CatalogFullTextIndexOptions.DecodeMetadata(values));
+        }
+        catch (ArgumentException exception)
+        {
+            throw new StorageFormatException("Invalid full-text index metadata.", exception);
+        }
     }
 
     private static void WriteByte(IBufferWriter<byte> output, byte value) { var span = output.GetSpan(1); span[0] = value; output.Advance(1); }

@@ -44,11 +44,11 @@ Your repository `NuGet.config` can then contain only the source URL:
 
 ## 2. Install the package
 
-Install the sampling- and temporal-capable contract release (or a later compatible version):
+Install the full-text term-index capable contract release (or a later compatible version):
 
 ```bash
 dotnet add package SqlStorageEngine \
-  --version 1.7.1 \
+  --version 1.8.0 \
   --source "https://nuget.pkg.github.com/callummarshall9/index.json"
 ```
 
@@ -163,10 +163,34 @@ await storage.CreateTableTypeAsync("sales", "AccountBatch",
 Typed XML collections are registered with `CreateXmlSchemaCollectionAsync` before columns reference
 `SqlType.TypedXml`; they can later be extended or dropped when dependency-free. CLR assemblies are cataloged with
 `CreateAssemblyAsync`, and trusted executable behavior is bound through `ISqlClrTypeRuntime`. JSON-path, namespace-bound
-XML, spatial, and vector indexes use `CreateSpecializedIndexAsync`; opened indexes expose JSON value/existence and XML
+XML, spatial, vector, and full-text indexes use `CreateSpecializedIndexAsync`; opened indexes expose JSON value/existence and XML
 path/value seeks in addition to whole-value lookup. Cosine vector indexes reject zero vectors during build and mutation,
 and cosine nearest queries reject a zero query rather than silently dropping non-finite distances. The full coverage and normalization matrix is in
 [SQL Server 2025 data-type coverage](docs/sql-server-data-types.md).
+
+A full-text index is a durable inverted index over one collated textual column. Version 1.8.0 deliberately supports only
+the culture-neutral `und` language, `unicode-word` tokenizer version 1, the versioned `none` stoplist, transactional
+maintenance, and one exact term per query. Its collation identity must exactly match the source column. Matches stream
+without rank; phrase, prefix, inflectional, thesaurus, Boolean/proximity, ranked-rowset, and custom-stoplist semantics are
+not implied:
+
+```csharp
+CatalogIndex terms = await storage.CreateSpecializedIndexAsync("users_name_terms", table.Id,
+    new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.Last),
+    CatalogSpecializedIndexOptions.FullText(
+        new CatalogFullTextIndexOptions("Latin1_General_100_CI_AI")));
+
+IStorageIndex termIndex = await storage.OpenIndexAsync(terms.Id);
+await foreach (FullTextIndexMatch match in termIndex.SearchFullTextAsync(
+                   new FullTextSearchRequest("ada")))
+{
+    Console.WriteLine(match.RowId); // match.Rank is null by contract
+}
+```
+
+Unsupported language identities and multi-term strings fail before tree enumeration. Token-count and token-length
+ceilings reject index builds or row mutations with explicit resource errors; there is no table-scan or string-predicate
+fallback.
 
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are

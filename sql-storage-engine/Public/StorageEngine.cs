@@ -920,6 +920,20 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                 : CatalogIndexKey.EncodeXmlPathValue(definition, path, value), cancellationToken).ConfigureAwait(false);
         }
 
+        public async IAsyncEnumerable<FullTextIndexMatch> SearchFullTextAsync(FullTextSearchRequest request,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            EnsureCurrent();
+            ArgumentNullException.ThrowIfNull(request);
+            if (definition.Method != CatalogIndexMethod.FullText)
+                throw new InvalidOperationException("Full-text search requires a full-text index.");
+            var key = CatalogIndexKey.EncodeFullTextTerm(definition, table, request);
+            using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+            var range = new IndexRange(key, key, true, true);
+            await foreach (var entry in tree.ScanAsync(range, cancellationToken).ConfigureAwait(false))
+                yield return new FullTextIndexMatch(entry.RowId);
+        }
+
         private void EnsureCurrent()
         {
             if (_generation != Volatile.Read(ref owner._handleGeneration))

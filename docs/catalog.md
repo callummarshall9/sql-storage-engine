@@ -19,9 +19,18 @@ Cosine vector indexes admit only non-NULL vectors with a nonzero norm, and cosin
 nonzero query vector. This makes the persisted metric a usable exact-error capability for query planners. A legacy index
 containing a zero vector raises `NonFiniteVectorDistanceException` instead of silently omitting that candidate.
 
+Full-text term indexes persist their exact source collation, `und` language, `unicode-word` tokenizer version 1,
+versioned `none` stoplist, transactional consistency, and document token-count/token-length ceilings. Each distinct
+Unicode word token in a non-NULL document becomes one collation-weighted `(token, RowId)` entry. Initial build and the
+ordinary table insert/update/delete compensation path maintain those entries atomically. `SearchFullTextAsync` accepts
+one exact token with the index language identity and streams generation-safe row IDs; its match rank is explicitly
+unavailable. Unsupported languages, multi-token grammar, and resource-limit violations fail without scanning source
+rows. Phrases, prefixes, linguistic expansion, Boolean/proximity expressions, ranked rowsets, and stoplist/catalog DDL
+remain outside this storage contract.
+
 ## Bootstrap binary format
 
-Catalog format version 9 starts with the four bytes `43 41 54 39` (`CAT9`), a little-endian 16-bit version, two zero reserved bytes, and 32-bit table, index, scalar-type, table-type, XML-collection, and assembly counts. XML collections and assemblies precede table/index/type records so typed XML and CLR declarations resolve shared identities while decoding. Table records encode database and schema before object name and end with optional system-versioning metadata. Versions 6 and 7 remain readable, and version 8 catalogs decode spatial indexes with the all-SRID policy used by that release. The next catalog publication upgrades an older form to version 9. Typed XML type records store only collection identity. Index records retain B-tree, JSON-path, namespace-bound XML, spatial SRID, or vector method metadata. An exact-SRID spatial index rejects incompatible non-NULL values during build and mutation, so its published SRID is a table-value capability rather than a lossy row filter.
+Catalog format version 9 starts with the four bytes `43 41 54 39` (`CAT9`), a little-endian 16-bit version, two zero reserved bytes, and 32-bit table, index, scalar-type, table-type, XML-collection, and assembly counts. XML collections and assemblies precede table/index/type records so typed XML and CLR declarations resolve shared identities while decoding. Table records encode database and schema before object name and end with optional system-versioning metadata. Versions 6 and 7 remain readable, and version 8 catalogs decode spatial indexes with the all-SRID policy used by that release. The next catalog publication upgrades an older form to version 9. Typed XML type records store only collection identity. Index records retain B-tree, JSON-path, namespace-bound XML, spatial SRID, vector, or full-text method metadata. The existing length-prefixed specialized-option vector carries full-text's nine versioned identity/resource fields; older readers reject the unknown method rather than misreading it. Exact-SRID spatial and full-text linguistic/resource options are table-value capabilities rather than lossy row filters.
 
 Integers are explicitly little-endian; strings are strict UTF-8 prefixed by a 32-bit byte length. Counts are bounded to 65,535; total catalog size is bounded by the 65,536-page catalog traversal limit. Unknown versions or type names, invalid facets, malformed XML schemas, truncation, trailing bytes, and nonzero reserved bytes are rejected. Invalid relationships between otherwise well-formed records are reported as storage corruption. Earlier catalog versions are intentionally not decoded because no released database depends on them.
 

@@ -44,6 +44,8 @@ local ext4 contract.
 | Encoded row | 16 MiB |
 | Generic physical index key | 65,535 bytes |
 | SQL nonclustered declared key | 1,700 bytes |
+| Full-text tokens per document | 65,535 |
+| Full-text token length | 128 UTF-16 code units |
 | Logical value | 2,147,483,647 bytes |
 | Overflow chain | 530,505 pages |
 | Transaction duration | 86,400 seconds |
