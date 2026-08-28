@@ -44,11 +44,11 @@ Your repository `NuGet.config` can then contain only the source URL:
 
 ## 2. Install the package
 
-Install the full-text term-index capable contract release (or a later compatible version):
+Install the graph identity/index capable contract release (or a later compatible version):
 
 ```bash
 dotnet add package SqlStorageEngine \
-  --version 1.8.0 \
+  --version 1.9.0 \
   --source "https://nuget.pkg.github.com/callummarshall9/index.json"
 ```
 
@@ -191,6 +191,56 @@ await foreach (FullTextIndexMatch match in termIndex.SearchFullTextAsync(
 Unsupported language identities and multi-term strings fail before tree enumeration. Token-count and token-length
 ceilings reject index builds or row mutations with explicit resource errors; there is no table-scan or string-predicate
 fallback.
+
+Version 1.9.0 adds a storage-level graph identity and adjacency contract without placing MATCH or path algorithms in the
+storage package. Define the hidden generated columns and ordinary indexes first, then register the empty tables. Node and
+edge handles are the only mutation path after registration:
+
+```csharp
+CatalogColumn nodeIdentity = new(new ColumnId(2), "$node_id",
+    SqlType.Binary(GraphNodeId.EncodedLength), false,
+    generatedAlways: CatalogGeneratedAlwaysKind.GraphIdentity, isHidden: true);
+CatalogTable nodes = await storage.CreateTableAsync("people", [
+    new CatalogColumn(new ColumnId(1), "name", SqlType.NVarChar(200), false), nodeIdentity
+]);
+CatalogIndex nodeIdentityIndex = await storage.CreateIndexAsync("people_graph_id", nodes.Id, true,
+    [new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First)]);
+nodes = await storage.RegisterGraphNodeTableAsync(nodes.Id, new ColumnId(2), nodeIdentityIndex.Id);
+
+CatalogTable edges = await storage.CreateTableAsync("knows", [
+    new CatalogColumn(new ColumnId(1), "since", SqlType.Date, true),
+    new CatalogColumn(new ColumnId(2), "$edge_id", SqlType.Binary(GraphEdgeId.EncodedLength), false,
+        generatedAlways: CatalogGeneratedAlwaysKind.GraphIdentity, isHidden: true),
+    new CatalogColumn(new ColumnId(3), "$from_id", SqlType.Binary(GraphNodeId.EncodedLength), false,
+        generatedAlways: CatalogGeneratedAlwaysKind.GraphFromNode, isHidden: true),
+    new CatalogColumn(new ColumnId(4), "$to_id", SqlType.Binary(GraphNodeId.EncodedLength), false,
+        generatedAlways: CatalogGeneratedAlwaysKind.GraphToNode, isHidden: true)
+]);
+CatalogIndex edgeIdentity = await storage.CreateIndexAsync("knows_graph_id", edges.Id, true,
+    [new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First)]);
+CatalogIndex outgoing = await storage.CreateIndexAsync("knows_from", edges.Id, false,
+    [new CatalogIndexedColumn(new ColumnId(3), SortDirection.Ascending, NullSortOrder.First)]);
+CatalogIndex incoming = await storage.CreateIndexAsync("knows_to", edges.Id, false,
+    [new CatalogIndexedColumn(new ColumnId(4), SortDirection.Ascending, NullSortOrder.First)]);
+edges = await storage.RegisterGraphEdgeTableAsync(edges.Id, new ColumnId(2), edgeIdentity.Id,
+    nodes.Id, new ColumnId(3), outgoing.Id, nodes.Id, new ColumnId(4), incoming.Id);
+
+IStorageGraphNodeTable people = await storage.OpenGraphNodeTableAsync(nodes.Id);
+IStorageGraphEdgeTable knows = await storage.OpenGraphEdgeTableAsync(edges.Id);
+GraphNodeId ada = await people.InsertAsync(new Row([SqlValue.Text("Ada")]));
+GraphNodeId grace = await people.InsertAsync(new Row([SqlValue.Text("Grace")]));
+await knows.InsertAsync(ada, grace, new Row([SqlValue.Date(new DateOnly(2026, 1, 1))]));
+
+await foreach (StoredGraphEdge edge in knows.TraverseAsync(ada, GraphEdgeDirection.Outgoing,
+                   new GraphTraversalOptions(maximumEdges: 1_000)))
+    Console.WriteLine(edge.ToNodeId);
+```
+
+Graph IDs include the persisted database incarnation, table ID, and schema version and remain stable when heap rows
+relocate. Inserts/reconnections reject missing, stale, cross-table, or cross-database endpoints before effects; node
+deletion rejects live references. Directional adjacency lookup is cancellation-aware, deduplicates self-loops for
+`Both`, and fails before yielding when its configured result limit would be exceeded. Multi-hop traversal, cycle and
+duplicate path semantics, MATCH ordering, graph DDL syntax, and graph query optimization belong to the SQL executor.
 
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are

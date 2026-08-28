@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 9;
-    public const uint Magic = 0x39544143; // "CAT9" in persisted little-endian byte order.
+    public const ushort FormatVersion = 10;
+    public const uint Magic = 0x30544143; // "CAT0": the single-byte suffix represents catalog format 10.
+    private const uint Version9Magic = 0x39544143;
     private const uint Version8Magic = 0x38544143;
     private const uint Version7Magic = 0x37544143;
     private const uint Version6Magic = 0x36544143;
@@ -81,6 +82,22 @@ public static class CatalogCodec
                 WriteUInt64(output, temporal.HistoryTableId.Value);
                 WriteUInt64(output, temporal.PeriodStartColumnId.Value);
                 WriteUInt64(output, temporal.PeriodEndColumnId.Value);
+            }
+            WriteByte(output, table.Graph is null ? (byte)0 : (byte)1);
+            if (table.Graph is { } graph)
+            {
+                WriteByte(output, (byte)graph.Kind);
+                WriteUInt64(output, graph.IdentityColumnId.Value);
+                WriteUInt64(output, graph.IdentityIndexId.Value);
+                if (graph.Kind == GraphTableKind.Edge)
+                {
+                    WriteUInt64(output, graph.FromNodeTableId!.Value.Value);
+                    WriteUInt64(output, graph.FromNodeColumnId!.Value.Value);
+                    WriteUInt64(output, graph.OutgoingIndexId!.Value.Value);
+                    WriteUInt64(output, graph.ToNodeTableId!.Value.Value);
+                    WriteUInt64(output, graph.ToNodeColumnId!.Value.Value);
+                    WriteUInt64(output, graph.IncomingIndexId!.Value.Value);
+                }
             }
         }
         foreach (var index in catalog.Indexes)
@@ -155,11 +172,12 @@ public static class CatalogCodec
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version8Magic or Version7Magic or Version6Magic))
+        if (magic is not (Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
             throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or 7 or 8 or FormatVersion) || version == 6 && magic != Version6Magic ||
+        if (version is not (6 or 7 or 8 or 9 or FormatVersion) || version == 6 && magic != Version6Magic ||
             version == 7 && magic != Version7Magic || version == 8 && magic != Version8Magic ||
+            version == 9 && magic != Version9Magic ||
             version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
@@ -225,10 +243,30 @@ public static class CatalogCodec
                 catch (ArgumentException exception)
                 { throw new StorageFormatException("Invalid system-versioning metadata.", exception); }
             }
+            CatalogGraphTable? graph = null;
+            if (version >= 10 && reader.Boolean())
+            {
+                var kind = (GraphTableKind)reader.Byte();
+                var identityColumnId = new ColumnId(reader.UInt64());
+                var identityIndexId = new IndexId(reader.UInt64());
+                try
+                {
+                    graph = kind switch
+                    {
+                        GraphTableKind.Node => CatalogGraphTable.Node(identityColumnId, identityIndexId),
+                        GraphTableKind.Edge => CatalogGraphTable.Edge(identityColumnId, identityIndexId,
+                            new TableId(reader.UInt64()), new ColumnId(reader.UInt64()), new IndexId(reader.UInt64()),
+                            new TableId(reader.UInt64()), new ColumnId(reader.UInt64()), new IndexId(reader.UInt64())),
+                        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+                    };
+                }
+                catch (ArgumentException exception)
+                { throw new StorageFormatException("Invalid graph-table metadata.", exception); }
+            }
             try
             {
                 tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
-                databaseName, schemaName, systemVersioning));
+                databaseName, schemaName, systemVersioning, graph));
             }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog table record.", exception); }
         }

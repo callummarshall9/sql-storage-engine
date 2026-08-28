@@ -220,7 +220,18 @@ public enum CatalogAssemblyPermissionSet : byte
 }
 
 public enum CatalogGeneratedAlwaysKind : byte
-{ None = 0, RowStart = 1, RowEnd = 2, TransactionIdStart = 3, TransactionIdEnd = 4, SequenceNumberStart = 5, SequenceNumberEnd = 6 }
+{
+    None = 0,
+    RowStart = 1,
+    RowEnd = 2,
+    TransactionIdStart = 3,
+    TransactionIdEnd = 4,
+    SequenceNumberStart = 5,
+    SequenceNumberEnd = 6,
+    GraphIdentity = 7,
+    GraphFromNode = 8,
+    GraphToNode = 9
+}
 public enum CatalogEncryptionType : byte { Deterministic = 1, Randomized = 2 }
 
 /// <summary>
@@ -396,9 +407,13 @@ public sealed record CatalogColumn
             !(type.CollationMetadata?.IsBinary2 ?? false))
             throw new ArgumentException("Deterministically encrypted character columns require a BIN2 collation.", nameof(encryption));
         if (!Enum.IsDefined(generatedAlways)) throw new ArgumentOutOfRangeException(nameof(generatedAlways));
-        if (generatedAlways is CatalogGeneratedAlwaysKind.RowStart or CatalogGeneratedAlwaysKind.RowEnd && type.Name != SqlTypeName.DateTime2 ||
-            generatedAlways is CatalogGeneratedAlwaysKind.TransactionIdStart or CatalogGeneratedAlwaysKind.TransactionIdEnd or
-                CatalogGeneratedAlwaysKind.SequenceNumberStart or CatalogGeneratedAlwaysKind.SequenceNumberEnd && type.Name != SqlTypeName.BigInt)
+        if ((generatedAlways is CatalogGeneratedAlwaysKind.RowStart or CatalogGeneratedAlwaysKind.RowEnd &&
+             type.Name != SqlTypeName.DateTime2) ||
+            (generatedAlways is CatalogGeneratedAlwaysKind.TransactionIdStart or CatalogGeneratedAlwaysKind.TransactionIdEnd or
+                 CatalogGeneratedAlwaysKind.SequenceNumberStart or CatalogGeneratedAlwaysKind.SequenceNumberEnd &&
+             type.Name != SqlTypeName.BigInt) ||
+            (generatedAlways is CatalogGeneratedAlwaysKind.GraphIdentity or CatalogGeneratedAlwaysKind.GraphFromNode or
+                 CatalogGeneratedAlwaysKind.GraphToNode && type != SqlType.Binary(GraphNodeId.EncodedLength)))
             throw new ArgumentException("GENERATED ALWAYS has an incompatible SQL type.", nameof(generatedAlways));
         if (isHidden && generatedAlways == CatalogGeneratedAlwaysKind.None)
             throw new ArgumentException("HIDDEN requires a generated-always column.", nameof(isHidden));
@@ -439,7 +454,7 @@ public sealed record CatalogTable
     public CatalogTable(TableId id, string name, ulong schemaVersion, PageId firstHeapPageId,
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
         BigInteger? nextIdentityValue = null, string databaseName = "default", string schemaName = "dbo",
-        CatalogSystemVersioning? systemVersioning = null)
+        CatalogSystemVersioning? systemVersioning = null, CatalogGraphTable? graph = null)
     {
         var qualifiedName = new CatalogTableName(databaseName, schemaName, name);
         if (schemaVersion == 0) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
@@ -507,6 +522,7 @@ public sealed record CatalogTable
         FirstHeapPageId = firstHeapPageId;
         NextIdentityValue = identity is null ? null : nextIdentityValue ?? identity.Seed;
         SystemVersioning = systemVersioning;
+        Graph = graph;
     }
 
     public TableId Id { get; }
@@ -520,6 +536,7 @@ public sealed record CatalogTable
     public IReadOnlyList<CatalogCheckConstraint> CheckConstraints => Array.AsReadOnly(_checkConstraints);
     public BigInteger? NextIdentityValue { get; }
     public CatalogSystemVersioning? SystemVersioning { get; }
+    public CatalogGraphTable? Graph { get; }
 
     internal static void ValidateUnique<T>(IEnumerable<T> values, string description, string parameterName,
         IEqualityComparer<T>? comparer = null)
@@ -945,6 +962,36 @@ public sealed class CatalogDefinition
         }
 
         var tablesById = _tables.ToDictionary(table => table.Id);
+        var indexesById = _indexes.ToDictionary(index => index.Id);
+        foreach (var table in _tables.Where(table => table.Graph is not null))
+        {
+            var graph = table.Graph!;
+            if (table.SystemVersioning is not null)
+                throw new ArgumentException("Graph tables cannot also be system-versioned.", nameof(tables));
+            var identity = RequireGraphColumn(table, graph.IdentityColumnId, CatalogGeneratedAlwaysKind.GraphIdentity,
+                nameof(tables));
+            if ((graph.Kind == GraphTableKind.Node && table.Columns[^1].Id != identity.Id) ||
+                (graph.Kind == GraphTableKind.Edge && table.Columns[^3].Id != identity.Id))
+                throw new ArgumentException("Graph identity columns must occupy the documented trailing position.", nameof(tables));
+            RequireGraphIndex(table, graph.IdentityIndexId, identity.Id, unique: true, indexesById, nameof(indexes));
+            if (graph.Kind == GraphTableKind.Node) continue;
+
+            if (!tablesById.TryGetValue(graph.FromNodeTableId!.Value, out var fromTable) ||
+                fromTable.Graph?.Kind != GraphTableKind.Node ||
+                !tablesById.TryGetValue(graph.ToNodeTableId!.Value, out var toTable) ||
+                toTable.Graph?.Kind != GraphTableKind.Node)
+                throw new ArgumentException("Graph edge endpoints must reference registered node tables.", nameof(tables));
+            var from = RequireGraphColumn(table, graph.FromNodeColumnId!.Value,
+                CatalogGeneratedAlwaysKind.GraphFromNode, nameof(tables));
+            var to = RequireGraphColumn(table, graph.ToNodeColumnId!.Value,
+                CatalogGeneratedAlwaysKind.GraphToNode, nameof(tables));
+            if (table.Columns[^2].Id != from.Id || table.Columns[^1].Id != to.Id)
+                throw new ArgumentException("Graph edge endpoint columns must be the final two columns.", nameof(tables));
+            RequireGraphIndex(table, graph.OutgoingIndexId!.Value, from.Id, unique: false, indexesById,
+                nameof(indexes));
+            RequireGraphIndex(table, graph.IncomingIndexId!.Value, to.Id, unique: false, indexesById,
+                nameof(indexes));
+        }
         foreach (var current in _tables.Where(table => table.SystemVersioning is not null))
         {
             var temporal = current.SystemVersioning!;
@@ -1097,6 +1144,30 @@ public sealed class CatalogDefinition
     public IReadOnlyList<CatalogTableType> TableTypes => Array.AsReadOnly(_tableTypes);
     public IReadOnlyList<SqlXmlSchemaCollection> XmlSchemaCollections => Array.AsReadOnly(_xmlSchemaCollections);
     public IReadOnlyList<CatalogAssembly> Assemblies => Array.AsReadOnly(_assemblies);
+
+    private static CatalogColumn RequireGraphColumn(CatalogTable table, ColumnId columnId,
+        CatalogGeneratedAlwaysKind generatedAlways, string parameterName)
+    {
+        var column = table.Columns.SingleOrDefault(candidate => candidate.Id == columnId) ??
+            throw new ArgumentException("Graph metadata references an unknown column.", parameterName);
+        if (column.Type != SqlType.Binary(GraphNodeId.EncodedLength) || column.IsNullable || !column.IsHidden ||
+            column.GeneratedAlways != generatedAlways || column.DefaultExpression is not null ||
+            column.Identity is not null || column.IsComputed || column.Encryption is not null)
+            throw new ArgumentException(
+                $"Graph column '{column.Name}' must be hidden, non-null binary({GraphNodeId.EncodedLength}) with its exact generated-always kind.",
+                parameterName);
+        return column;
+    }
+
+    private static void RequireGraphIndex(CatalogTable table, IndexId indexId, ColumnId columnId, bool unique,
+        IReadOnlyDictionary<IndexId, CatalogIndex> indexes, string parameterName)
+    {
+        if (!indexes.TryGetValue(indexId, out var index) || index.TableId != table.Id ||
+            index.Method != CatalogIndexMethod.BTree || index.IsUnique != unique || index.Columns.Count != 1 ||
+            index.Columns[0].ColumnId != columnId)
+            throw new ArgumentException("Graph metadata references an incompatible identity or adjacency index.",
+                parameterName);
+    }
 
     internal static int MaximumIndexKeyBytes(SqlType type) => type.UserTypeKind switch
     {

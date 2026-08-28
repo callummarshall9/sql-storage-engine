@@ -139,7 +139,15 @@ public sealed class TableStorage
     public async ValueTask<TableInsertResult> TryInsertAsync(Row row, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(row);
-        row = await PrepareInsertAsync(row, cancellationToken).ConfigureAwait(false);
+        row = await PrepareInsertAsync(row, graphMutation: false, cancellationToken).ConfigureAwait(false);
+        return await InsertPreparedAsync(row, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<TableInsertResult> InsertGraphAsync(Row row,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        row = await PrepareInsertAsync(row, graphMutation: true, cancellationToken).ConfigureAwait(false);
         return await InsertPreparedAsync(row, cancellationToken).ConfigureAwait(false);
     }
 
@@ -216,21 +224,25 @@ public sealed class TableStorage
     /// <summary>Applies selected columns while maintaining changed keys and all RowId references after relocation.</summary>
     public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update,
         CancellationToken cancellationToken = default)
-        => await UpdateCoreAsync(rowId, update, null, cancellationToken).ConfigureAwait(false);
+        => await UpdateCoreAsync(rowId, update, null, graphMutation: false, cancellationToken).ConfigureAwait(false);
+
+    internal async ValueTask<TableUpdateResult> UpdateGraphAsync(RowId rowId, RowUpdate update,
+        CancellationToken cancellationToken = default)
+        => await UpdateCoreAsync(rowId, update, null, graphMutation: true, cancellationToken).ConfigureAwait(false);
 
     internal async ValueTask<TableUpdateResult> UpdateSystemVersionedAsync(RowId rowId, RowUpdate update,
         SqlValue periodStart, CancellationToken cancellationToken = default)
-        => await UpdateCoreAsync(rowId, update, periodStart, cancellationToken).ConfigureAwait(false);
+        => await UpdateCoreAsync(rowId, update, periodStart, graphMutation: false, cancellationToken).ConfigureAwait(false);
 
     private async ValueTask<TableUpdateResult> UpdateCoreAsync(RowId rowId, RowUpdate update,
-        SqlValue? periodStart, CancellationToken cancellationToken)
+        SqlValue? periodStart, bool graphMutation, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(update);
         var current = await _heap.ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
         if (current.Result != TableHeapLookupResult.Found) return new TableUpdateResult(false, rowId, rowId);
         var oldBytes = current.Row.ToArray();
         var oldRow = await _rowCodec.DecodeAsync(current.Row, _schema, cancellationToken).ConfigureAwait(false);
-        update = await PrepareUpdateAsync(oldRow, update, periodStart, cancellationToken).ConfigureAwait(false);
+        update = await PrepareUpdateAsync(oldRow, update, periodStart, graphMutation, cancellationToken).ConfigureAwait(false);
         var replacement = await _rowCodec.ApplyUpdateAsync(current.Row, update, _schema, cancellationToken).ConfigureAwait(false);
         var newRow = await _rowCodec.DecodeAsync(replacement.Bytes, _schema, cancellationToken).ConfigureAwait(false);
         var heapResult = await _heap.UpdateAsync(rowId, replacement.Bytes, cancellationToken).ConfigureAwait(false);
@@ -286,8 +298,10 @@ public sealed class TableStorage
             for (var index = removedEntries.Count - 1; index >= 0; index--)
             {
                 try
-                { await removedEntries[index].Index.AddAsync(removedEntries[index].Key, rowId,
-                    removedEntries[index].Payload, CancellationToken.None).ConfigureAwait(false); }
+                {
+                    await removedEntries[index].Index.AddAsync(removedEntries[index].Key, rowId,
+                    removedEntries[index].Payload, CancellationToken.None).ConfigureAwait(false);
+                }
                 catch (StorageException) { unreclaimed.Add(removedEntries[index].Index.Definition.RootPageId); }
             }
             try
@@ -305,7 +319,8 @@ public sealed class TableStorage
         }
     }
 
-    private async ValueTask<Row> PrepareInsertAsync(Row row, CancellationToken cancellationToken)
+    private async ValueTask<Row> PrepareInsertAsync(Row row, bool graphMutation,
+        CancellationToken cancellationToken)
     {
         if (row.Values.Count != _schema.Columns.Count)
             throw new ArgumentException("Row width does not match schema width.", nameof(row));
@@ -325,10 +340,22 @@ public sealed class TableStorage
                 values[position] = await RequireRowVersionGenerator()(cancellationToken).ConfigureAwait(false);
             else if (column.GeneratedAlways != CatalogGeneratedAlwaysKind.None)
             {
-                if (supplied is not DefaultSqlValue && !supplied.IsNull)
-                    throw new ArgumentException($"Generated-always column '{column.Name}' cannot be assigned explicitly.", nameof(row));
-                values[position] = SqlConversion.ConvertTo(column.Type,
-                    await RequireGeneratedValueGenerator()(column.GeneratedAlways, cancellationToken).ConfigureAwait(false));
+                var isGraphColumn = column.GeneratedAlways is CatalogGeneratedAlwaysKind.GraphIdentity or
+                    CatalogGeneratedAlwaysKind.GraphFromNode or CatalogGeneratedAlwaysKind.GraphToNode;
+                if (graphMutation && isGraphColumn)
+                {
+                    if (supplied is DefaultSqlValue || supplied.IsNull)
+                        throw new ArgumentException($"Graph-generated column '{column.Name}' requires an engine value.",
+                            nameof(row));
+                    values[position] = SqlConversion.ConvertTo(column.Type, supplied);
+                }
+                else
+                {
+                    if (supplied is not DefaultSqlValue && !supplied.IsNull)
+                        throw new ArgumentException($"Generated-always column '{column.Name}' cannot be assigned explicitly.", nameof(row));
+                    values[position] = SqlConversion.ConvertTo(column.Type,
+                        await RequireGeneratedValueGenerator()(column.GeneratedAlways, cancellationToken).ConfigureAwait(false));
+                }
             }
             else if (column.IsComputed)
             {
@@ -361,7 +388,7 @@ public sealed class TableStorage
     }
 
     private async ValueTask<RowUpdate> PrepareUpdateAsync(Row oldRow, RowUpdate update, SqlValue? periodStart,
-        CancellationToken cancellationToken)
+        bool graphMutation, CancellationToken cancellationToken)
     {
         if (update.Columns.Select(column => column.ColumnIndex).Distinct().Count() != update.Columns.Count)
             throw new ArgumentException("Updated column indexes must be unique.", nameof(update));
@@ -384,7 +411,9 @@ public sealed class TableStorage
             if (column.Identity is not null) throw new ArgumentException("An IDENTITY column cannot be updated.", nameof(update));
             if (column.IsComputed) throw new ArgumentException("A computed column cannot be updated directly.", nameof(update));
             if (column.IsColumnSet) continue;
-            if (column.GeneratedAlways != CatalogGeneratedAlwaysKind.None)
+            if (column.GeneratedAlways != CatalogGeneratedAlwaysKind.None &&
+                !(graphMutation && (column.GeneratedAlways is CatalogGeneratedAlwaysKind.GraphIdentity or
+                    CatalogGeneratedAlwaysKind.GraphFromNode or CatalogGeneratedAlwaysKind.GraphToNode)))
                 throw new ArgumentException("A generated-always column cannot be updated directly.", nameof(update));
             if (column.Type.Name is SqlTypeName.RowVersion or SqlTypeName.Timestamp)
                 throw new ArgumentException("A rowversion column cannot be assigned explicitly.", nameof(update));
@@ -406,6 +435,8 @@ public sealed class TableStorage
         {
             var column = _table.Columns[position];
             if (column.GeneratedAlways is CatalogGeneratedAlwaysKind.None or CatalogGeneratedAlwaysKind.RowEnd) continue;
+            if (column.GeneratedAlways is CatalogGeneratedAlwaysKind.GraphIdentity or
+                CatalogGeneratedAlwaysKind.GraphFromNode or CatalogGeneratedAlwaysKind.GraphToNode) continue;
             values[position] = column.GeneratedAlways == CatalogGeneratedAlwaysKind.RowStart && periodStart is not null
                 ? SqlConversion.ConvertTo(column.Type, periodStart)
                 : SqlConversion.ConvertTo(column.Type,
@@ -558,8 +589,11 @@ public sealed class TableStorage
         {
             List<PageId> unreclaimed = [];
             foreach (var mutation in removed.AsEnumerable().Reverse())
-                try { await mutation.Index.AddAsync(mutation.Key, rowId, mutation.Payload,
-                    CancellationToken.None).ConfigureAwait(false); }
+                try
+                {
+                    await mutation.Index.AddAsync(mutation.Key, rowId, mutation.Payload,
+                    CancellationToken.None).ConfigureAwait(false);
+                }
                 catch (StorageException) { unreclaimed.Add(mutation.Index.Definition.RootPageId); }
             throw new TableMutationException("Table deletion failed before the heap row was removed; index compensation was attempted.",
                 unreclaimed.Distinct().ToArray(), exception);

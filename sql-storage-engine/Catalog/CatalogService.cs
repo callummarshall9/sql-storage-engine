@@ -179,7 +179,7 @@ public sealed class CatalogService
             var next = current + identityColumn.Identity!.Increment;
             var replacement = new CatalogTable(table.Id, table.Name, table.SchemaVersion, table.FirstHeapPageId,
                 table.Columns, table.CheckConstraints, next, table.DatabaseName, table.SchemaName,
-                table.SystemVersioning);
+                table.SystemVersioning, table.Graph);
             var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
@@ -211,6 +211,39 @@ public sealed class CatalogService
     {
         table = _definition.Tables.SingleOrDefault(candidate => candidate.Id == id);
         return table is not null;
+    }
+
+    public ValueTask<CatalogTable> RegisterGraphNodeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, CancellationToken cancellationToken = default) =>
+        RegisterGraphTableAsync(tableId, CatalogGraphTable.Node(identityColumnId, identityIndexId),
+            cancellationToken);
+
+    public ValueTask<CatalogTable> RegisterGraphEdgeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, TableId fromNodeTableId, ColumnId fromNodeColumnId, IndexId outgoingIndexId,
+        TableId toNodeTableId, ColumnId toNodeColumnId, IndexId incomingIndexId,
+        CancellationToken cancellationToken = default) => RegisterGraphTableAsync(tableId,
+        CatalogGraphTable.Edge(identityColumnId, identityIndexId, fromNodeTableId, fromNodeColumnId,
+            outgoingIndexId, toNodeTableId, toNodeColumnId, incomingIndexId), cancellationToken);
+
+    private async ValueTask<CatalogTable> RegisterGraphTableAsync(TableId tableId, CatalogGraphTable graph,
+        CancellationToken cancellationToken)
+    {
+        await _catalogMutationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!TryOpenTable(tableId, out var table)) throw new ArgumentException("Unknown table ID.", nameof(tableId));
+            if (table!.Graph is not null)
+                throw new CatalogConflictException($"Table {table.QualifiedName} is already registered for graph storage.");
+            var replacement = new CatalogTable(table.Id, table.Name, checked(table.SchemaVersion + 1),
+                table.FirstHeapPageId, table.Columns, table.CheckConstraints, table.NextIdentityValue,
+                table.DatabaseName, table.SchemaName, table.SystemVersioning, graph);
+            var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
+                _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
+                _definition.XmlSchemaCollections, _definition.Assemblies);
+            await PublishDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
+            return replacement;
+        }
+        finally { _catalogMutationLock.Release(); }
     }
 
     public ValueTask<TableHeap> OpenHeapAsync(CatalogTable table, CancellationToken cancellationToken = default)
@@ -510,7 +543,7 @@ public sealed class CatalogService
         }
         var tables = _definition.Tables.Select(table => new CatalogTable(table.Id, table.Name, table.SchemaVersion,
             table.FirstHeapPageId, table.Columns.Select(RebindColumn), table.CheckConstraints, table.NextIdentityValue,
-            table.DatabaseName, table.SchemaName, table.SystemVersioning));
+            table.DatabaseName, table.SchemaName, table.SystemVersioning, table.Graph));
         var tableTypes = _definition.TableTypes.Select(type => new CatalogTableType(type.SchemaName, type.Name,
             type.Columns.Select(RebindColumn), type.Indexes, type.CheckConstraints, type.IsMemoryOptimized));
         return new CatalogDefinition(tables, _definition.Indexes, _definition.ScalarTypes, tableTypes,

@@ -324,6 +324,12 @@ public interface IStorageEngine : IAsyncDisposable
         CancellationToken cancellationToken = default);
     ValueTask<CatalogIndex> CreateSpecializedIndexAsync(string name, TableId tableId, CatalogIndexedColumn column,
         CatalogSpecializedIndexOptions options, CancellationToken cancellationToken = default);
+    ValueTask<CatalogTable> RegisterGraphNodeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, CancellationToken cancellationToken = default);
+    ValueTask<CatalogTable> RegisterGraphEdgeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, TableId fromNodeTableId, ColumnId fromNodeColumnId, IndexId outgoingIndexId,
+        TableId toNodeTableId, ColumnId toNodeColumnId, IndexId incomingIndexId,
+        CancellationToken cancellationToken = default);
     ValueTask<CatalogScalarType> CreateScalarTypeAsync(SqlType definition,
         CancellationToken cancellationToken = default);
     ValueTask<CatalogTableType> CreateTableTypeAsync(string schemaName, string name,
@@ -342,6 +348,10 @@ public interface IStorageEngine : IAsyncDisposable
     ValueTask DropAssemblyAsync(string name, CancellationToken cancellationToken = default);
     ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
     ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId, CancellationToken cancellationToken = default);
+    ValueTask<IStorageGraphNodeTable> OpenGraphNodeTableAsync(TableId tableId,
+        CancellationToken cancellationToken = default);
+    ValueTask<IStorageGraphEdgeTable> OpenGraphEdgeTableAsync(TableId tableId,
+        CancellationToken cancellationToken = default);
     ValueTask<StorageTableStatistics> GetTableStatisticsAsync(TableId tableId,
         CancellationToken cancellationToken = default);
     ValueTask<StorageIndexStatistics> GetIndexStatisticsAsync(IndexId indexId,

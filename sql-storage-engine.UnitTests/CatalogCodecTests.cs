@@ -28,18 +28,18 @@ public sealed class CatalogCodecTests
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
         Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
-            .Should().Be("xVv+/J+SamhOV4gEUC2DyyPk+sFp5DK011DIeaAhZMI=");
+            .Should().Be("uzNbagABC7gBatD2cQTus3jcSAG+AyXcMinXj37OKIY=");
     }
 
     [Test]
     public void Version7CatalogWithoutTemporalMetadataRemainsReadable()
     {
-        var version8 = CatalogCodec.Encode(Sample());
-        BinaryPrimitives.WriteUInt32LittleEndian(version8, 0x38544143);
-        BinaryPrimitives.WriteUInt16LittleEndian(version8.AsSpan(4), 8);
+        var version10 = CatalogCodec.Encode(Sample());
         const int indexRecordLength = 58;
-        var temporalMarkerOffset = version8.Length - indexRecordLength - 1;
-        var version7 = version8[..temporalMarkerOffset].Concat(version8[(temporalMarkerOffset + 1)..]).ToArray();
+        var graphMarkerOffset = version10.Length - indexRecordLength - 1;
+        var version9 = version10[..graphMarkerOffset].Concat(version10[(graphMarkerOffset + 1)..]).ToArray();
+        var temporalMarkerOffset = version9.Length - indexRecordLength - 1;
+        var version7 = version9[..temporalMarkerOffset].Concat(version9[(temporalMarkerOffset + 1)..]).ToArray();
         BinaryPrimitives.WriteUInt32LittleEndian(version7, 0x37544143);
         BinaryPrimitives.WriteUInt16LittleEndian(version7.AsSpan(4), 7);
 
@@ -64,7 +64,9 @@ public sealed class CatalogCodecTests
                 [new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First)],
                 CatalogSpecializedIndexOptions.Spatial())
         ]);
-        var version9 = CatalogCodec.Encode(catalog);
+        var version10 = CatalogCodec.Encode(catalog);
+        var tableOnlyLength = CatalogCodec.Encode(new CatalogDefinition([table], [])).Length;
+        var version9 = version10[..(tableOnlyLength - 1)].Concat(version10[tableOnlyLength..]).ToArray();
         var spatialSridMarkerOffset = version9.Length - 10;
         var version8 = version9[..spatialSridMarkerOffset]
             .Concat(version9[(spatialSridMarkerOffset + 1)..]).ToArray();
@@ -76,6 +78,42 @@ public sealed class CatalogCodecTests
         decoded.Indexes.Single(index => index.Method == CatalogIndexMethod.Spatial)
             .SpecializedOptions!.SpatialSrid.Should().BeNull();
     }
+
+    [Test]
+    public void GraphMetadataRoundTripsWithExactIdentityAndAdjacencyOwnership()
+    {
+        var identityType = SqlType.Binary(GraphNodeId.EncodedLength);
+        var node = new CatalogTable(new TableId(1), "nodes", 2, new PageId(2), [
+            new CatalogColumn(new ColumnId(1), "payload", SqlType.Int, true),
+            new CatalogColumn(new ColumnId(2), "$node_id", identityType, false,
+                generatedAlways: CatalogGeneratedAlwaysKind.GraphIdentity, isHidden: true)
+        ], graph: CatalogGraphTable.Node(new ColumnId(2), new IndexId(1)));
+        var edge = new CatalogTable(new TableId(2), "edges", 2, new PageId(3), [
+            new CatalogColumn(new ColumnId(1), "payload", SqlType.Int, true),
+            new CatalogColumn(new ColumnId(2), "$edge_id", identityType, false,
+                generatedAlways: CatalogGeneratedAlwaysKind.GraphIdentity, isHidden: true),
+            new CatalogColumn(new ColumnId(3), "$from_id", identityType, false,
+                generatedAlways: CatalogGeneratedAlwaysKind.GraphFromNode, isHidden: true),
+            new CatalogColumn(new ColumnId(4), "$to_id", identityType, false,
+                generatedAlways: CatalogGeneratedAlwaysKind.GraphToNode, isHidden: true)
+        ], graph: CatalogGraphTable.Edge(new ColumnId(2), new IndexId(2), node.Id, new ColumnId(3),
+            new IndexId(3), node.Id, new ColumnId(4), new IndexId(4)));
+        var catalog = new CatalogDefinition([node, edge], [
+            Index(1, node.Id, new ColumnId(2), unique: true),
+            Index(2, edge.Id, new ColumnId(2), unique: true),
+            Index(3, edge.Id, new ColumnId(3), unique: false),
+            Index(4, edge.Id, new ColumnId(4), unique: false)
+        ]);
+
+        var decoded = CatalogCodec.Decode(CatalogCodec.Encode(catalog));
+
+        decoded.Tables.Single(table => table.Id == node.Id).Graph.Should().BeEquivalentTo(node.Graph);
+        decoded.Tables.Single(table => table.Id == edge.Id).Graph.Should().BeEquivalentTo(edge.Graph);
+    }
+
+    private static CatalogIndex Index(ulong id, TableId tableId, ColumnId columnId, bool unique) =>
+        new(new IndexId(id), "i" + id, tableId, new PageId(id + 10), unique,
+            [new CatalogIndexedColumn(columnId, SortDirection.Ascending, NullSortOrder.First)]);
 
     [Test]
     public void UnknownVersionAndEveryTruncation_AreRejected()

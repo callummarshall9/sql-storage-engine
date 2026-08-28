@@ -183,6 +183,51 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         return index;
     }
 
+    public async ValueTask<CatalogTable> RegisterGraphNodeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
+            var table = await _catalog.RegisterGraphNodeTableAsync(tableId, identityColumnId, identityIndexId,
+                cancellationToken).ConfigureAwait(false);
+            await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _handleGeneration);
+            return table;
+        }
+        finally { _statementGate.Release(); }
+    }
+
+    public async ValueTask<CatalogTable> RegisterGraphEdgeTableAsync(TableId tableId, ColumnId identityColumnId,
+        IndexId identityIndexId, TableId fromNodeTableId, ColumnId fromNodeColumnId, IndexId outgoingIndexId,
+        TableId toNodeTableId, ColumnId toNodeColumnId, IndexId incomingIndexId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
+            var table = await _catalog.RegisterGraphEdgeTableAsync(tableId, identityColumnId, identityIndexId,
+                fromNodeTableId, fromNodeColumnId, outgoingIndexId, toNodeTableId, toNodeColumnId,
+                incomingIndexId, cancellationToken).ConfigureAwait(false);
+            await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _handleGeneration);
+            return table;
+        }
+        finally { _statementGate.Release(); }
+    }
+
+    private async ValueTask EnsureTableEmptyAsync(TableId tableId, CancellationToken cancellationToken)
+    {
+        var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
+        await using var rows = storage.ScanAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+        if (await rows.MoveNextAsync().ConfigureAwait(false))
+            throw new InvalidOperationException("A table must be empty before graph metadata is registered.");
+    }
+
     public async ValueTask<CatalogScalarType> CreateScalarTypeAsync(SqlType definition,
         CancellationToken cancellationToken = default)
     {
@@ -249,7 +294,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             () => generation == Volatile.Read(ref _handleGeneration));
     }
 
-    private async ValueTask<TableStorage> OpenTableStorageAsync(TableId tableId,
+    internal async ValueTask<TableStorage> OpenTableStorageAsync(TableId tableId,
         CancellationToken cancellationToken)
     {
         if (!_catalog.TryOpenTable(tableId, out var definition))
@@ -296,6 +341,34 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             ?? throw new KeyNotFoundException($"Unknown index {indexId}.");
         var table = _catalog.Tables.Single(candidate => candidate.Id == index.TableId);
         return ValueTask.FromResult<IStorageIndex>(new StorageIndex(index, table, _catalog.OpenIndex(index), this));
+    }
+
+    public async ValueTask<IStorageGraphNodeTable> OpenGraphNodeTableAsync(TableId tableId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
+        if (storage.Definition.Graph?.Kind != GraphTableKind.Node)
+            throw new InvalidOperationException("The requested table is not a registered graph node table.");
+        return new StorageGraphNodeTable(storage, this, Volatile.Read(ref _handleGeneration));
+    }
+
+    public async ValueTask<IStorageGraphEdgeTable> OpenGraphEdgeTableAsync(TableId tableId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
+        if (storage.Definition.Graph?.Kind != GraphTableKind.Edge)
+            throw new InvalidOperationException("The requested table is not a registered graph edge table.");
+        return new StorageGraphEdgeTable(storage, this, Volatile.Read(ref _handleGeneration));
+    }
+
+    internal CatalogService GraphCatalog => _catalog;
+    internal void EnsureGraphHandleCurrent(long generation)
+    {
+        ThrowIfDisposed();
+        if (generation != Volatile.Read(ref _handleGeneration))
+            throw new InvalidOperationException("The graph handle is stale after catalog replacement or rollback; reopen it.");
     }
 
     public async ValueTask<StorageTableStatistics> GetTableStatisticsAsync(TableId tableId,
@@ -472,6 +545,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
             RejectHistoryMutation();
+            RejectGraphMutation();
             var id = await storage.InsertAsync(row, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return id;
         }
@@ -479,6 +553,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         {
             EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
             RejectHistoryMutation();
+            RejectGraphMutation();
             var result = await storage.TryInsertAsync(row, cancellationToken).ConfigureAwait(false);
             if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
         }
@@ -561,6 +636,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             }
             using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
             RejectHistoryMutation();
+            RejectGraphMutation();
             var result = Definition.SystemVersioning is null
                 ? await storage.UpdateAsync(rowId, update, cancellationToken).ConfigureAwait(false)
                 : await UpdateTemporalAsync(rowId, update, cancellationToken).ConfigureAwait(false);
@@ -581,6 +657,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             }
             using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
             RejectHistoryMutation();
+            RejectGraphMutation();
             var result = Definition.SystemVersioning is null
                 ? await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false)
                 : await DeleteTemporalAsync(rowId, cancellationToken).ConfigureAwait(false);
@@ -688,6 +765,13 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
                     $"Temporal history table {Definition.QualifiedName} is maintained by {current!.QualifiedName}.");
         }
 
+        private void RejectGraphMutation()
+        {
+            if (Definition.Graph is not null)
+                throw new InvalidOperationException(
+                    $"Graph table {Definition.QualifiedName} must be mutated through its graph storage handle.");
+        }
+
         private void EnsureActive()
         {
             if (!isActive()) throw new InvalidOperationException("The statement scope has completed.");
@@ -702,7 +786,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         }));
     }
 
-    private async ValueTask<IDisposable> EnterStatementGateAsync(CancellationToken cancellationToken)
+    internal async ValueTask<IDisposable> EnterStatementGateAsync(CancellationToken cancellationToken)
     {
         await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         return new GateLease(_statementGate);
@@ -941,7 +1025,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         }
     }
 
-    private async ValueTask FlushAndPublishAsync(CancellationToken cancellationToken)
+    internal async ValueTask FlushAndPublishAsync(CancellationToken cancellationToken)
     {
         await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
         if (_catalog.RootPageId is { } root && _database.Header.CatalogRootPageId != root)
