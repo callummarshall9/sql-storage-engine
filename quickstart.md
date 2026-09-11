@@ -255,8 +255,10 @@ await storage.ExecuteStatementAsync(async (statement, token) =>
 });
 ```
 
-Available in 1.10.0. Use the payload schema of your registered tables. Graph and ordinary table
-mutations in the callback commit or roll back together, including their indexes. Await operations
+Statement graph handles are available in 1.10.0. Use the payload schema of your registered tables.
+Version 1.11.0 also offers `scopedEdges.UpdateAndReconnectAsync(edgeId, from, to, payloadUpdate, token)`
+to preserve edge identity and evaluate generation/checks once for the final row. Graph and ordinary
+table mutations in the callback commit or roll back together, including their indexes. Await operations
 sequentially; handles and enumerators must not escape the callback. See
 [statement guarantees and retry rules](docs/transactions.md#statement-scoped-graph-handles-1100).
 

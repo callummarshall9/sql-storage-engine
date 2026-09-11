@@ -58,11 +58,16 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         return result.Updated;
     }
 
-    public async ValueTask<bool> ReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId,
+    public ValueTask<bool> ReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId,
         GraphNodeId toNodeId, CancellationToken cancellationToken = default)
+        => UpdateAndReconnectAsync(edgeId, fromNodeId, toNodeId, new RowUpdate([]), cancellationToken);
+
+    public async ValueTask<bool> UpdateAndReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId,
+        GraphNodeId toNodeId, RowUpdate update, CancellationToken cancellationToken = default)
     {
         _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
+        GraphStorageRuntime.ValidatePayloadUpdate(update, Definition.Columns.Count - 3);
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(fromNodeId, GraphDefinition.FromNodeTableId!.Value, nameof(fromNodeId),
             cancellationToken).ConfigureAwait(false);
@@ -71,6 +76,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.UpdateGraphAsync(rowId.Value, new RowUpdate([
+            .. update.Columns,
             new ColumnUpdate(Definition.Columns.Count - 2, fromNodeId.ToSqlValue()),
             new ColumnUpdate(Definition.Columns.Count - 1, toNodeId.ToSqlValue())
         ]), cancellationToken).ConfigureAwait(false);

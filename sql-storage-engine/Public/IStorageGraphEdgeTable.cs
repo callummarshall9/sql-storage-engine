@@ -15,6 +15,12 @@ public interface IStorageGraphEdgeTable
         CancellationToken cancellationToken = default);
     ValueTask<bool> ReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId, GraphNodeId toNodeId,
         CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Changes payload and endpoints in one row transition, preserving edge identity and evaluating
+    /// generated values and constraints once. Use a statement-scoped handle for multi-effect atomicity.
+    /// </summary>
+    ValueTask<bool> UpdateAndReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId, GraphNodeId toNodeId,
+        RowUpdate update, CancellationToken cancellationToken = default);
     ValueTask<bool> DeleteAsync(GraphEdgeId edgeId, CancellationToken cancellationToken = default);
     IAsyncEnumerable<StoredGraphEdge> TraverseAsync(GraphNodeId nodeId, GraphEdgeDirection direction,
         GraphTraversalOptions? options = null, CancellationToken cancellationToken = default);

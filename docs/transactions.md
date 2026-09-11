@@ -43,6 +43,14 @@ durable commit still requires caller-owned idempotency; this API does not add au
 This does not add graph catalog registration inside statements, multi-statement transactions,
 or executor-level SQL DML/OUTPUT semantics. No database format change is required.
 
+Version 1.11.0 adds `IStorageGraphEdgeTable.UpdateAndReconnectAsync` for a single
+payload-and-endpoint transition. It preserves the edge ID, validates live endpoints,
+and evaluates rowversion/computed values, checks, and indexes against the complete
+replacement once. Do not emulate it using separate UpdateAsync/ reconnect calls:
+those remain two row mutations even inside one journal. The existing endpoint-only
+ReconnectAsync delegates to the combined operation with an empty payload update.
+This storage operation does not authorize endpoint UPDATE syntax in a SQL dialect.
+
 Evidence: `GraphStatementTests` covers successful mixed mutations, referential failure,
 cancellation, traversal resource exhaustion, retry, index restoration, reopen recovery from
 an active journal, and expired handles/enumerators. The journal recovery test reconstructs
