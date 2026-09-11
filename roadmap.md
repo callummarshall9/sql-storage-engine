@@ -768,6 +768,9 @@ The engine has a published support envelope and objective evidence that its dura
 
 ## 16. Cross-cutting quality gates
 
+The 1.10.0 statement-scoped graph API gate is recorded in
+[its delivery review](docs/graph-statement-review.md).
+
 Every milestone must satisfy the following gates.
 
 ### Correctness

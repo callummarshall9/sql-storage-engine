@@ -264,14 +264,6 @@ public interface IStorageTable
     ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default);
 }
 
-/// <summary>A statement-scoped view whose mutations commit or roll back as one durable unit.</summary>
-public interface IStorageStatement
-{
-    ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name, IEnumerable<CatalogColumn> columns,
-        IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
-        CancellationToken cancellationToken = default);
-    ValueTask<IStorageTable> OpenTableAsync(TableId tableId, CancellationToken cancellationToken = default);
-}
 
 /// <summary>Logical secondary-index access using typed values in the index's declared column order.</summary>
 public interface IStorageIndex

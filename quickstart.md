@@ -242,6 +242,24 @@ deletion rejects live references. Directional adjacency lookup is cancellation-a
 `Both`, and fails before yielding when its configured result limit would be exceeded. Multi-hop traversal, cycle and
 duplicate path semantics, MATCH ordering, graph DDL syntax, and graph query optimization belong to the SQL executor.
 
+For atomic graph DML, open graph handles from the statement, not the engine root:
+
+```csharp
+await storage.ExecuteStatementAsync(async (statement, token) =>
+{
+    var scopedNodes = await statement.OpenGraphNodeTableAsync(nodes.Id, token);
+    var scopedEdges = await statement.OpenGraphEdgeTableAsync(edges.Id, token);
+    var from = await scopedNodes.InsertAsync(new Row([SqlValue.Text("from")]), token);
+    var to = await scopedNodes.InsertAsync(new Row([SqlValue.Text("to")]), token);
+    await scopedEdges.InsertAsync(from, to, new Row([SqlValue.Date(new DateOnly(2026, 1, 1))]), token);
+});
+```
+
+Available in 1.10.0. Use the payload schema of your registered tables. Graph and ordinary table
+mutations in the callback commit or roll back together, including their indexes. Await operations
+sequentially; handles and enumerators must not escape the callback. See
+[statement guarantees and retry rules](docs/transactions.md#statement-scoped-graph-handles-1100).
+
 Column values supplied to an index are in its declared column order. A table scan streams `StoredRow` values; an
 index scan streams matching `RowId` values which can be fetched from the owning table. DDL and row mutations are
 flushed before they return. Use `ExecuteStatementAsync` when several row mutations must commit as one crash-atomic

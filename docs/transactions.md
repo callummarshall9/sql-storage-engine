@@ -22,3 +22,28 @@ Startup examines the journal before opening the database. An active journal rest
 a committed journal is discarded. The journal is deliberately database-wide in this release: it gives a small embedded
 engine a clear crash-atomic contract at the cost of copying the database once per mutation statement. A later WAL-backed
 implementation can replace the mechanism without changing the public statement API.
+
+### Statement-scoped graph handles (1.10.0)
+
+The callback can call `IStorageStatement.OpenGraphNodeTableAsync` and
+`OpenGraphEdgeTableAsync`. These return the existing graph interfaces, with the same generated
+identity, payload, endpoint-existence, referenced-node deletion, and index-maintenance rules.
+Node/edge insert, payload update, reconnect, and delete join the enclosing statement's journal:
+heap, identity, outgoing/incoming adjacency, payload indexes, and ordinary table mutations
+commit or restore together. Reads and traversals see earlier writes in the callback.
+
+Use only statement-scoped handles inside the callback; root handles acquire the statement gate
+and must not be called from a callback that already holds it. Await operations sequentially and
+dispose enumerators before returning. Scoped handles and enumerators reject use after completion.
+Rollback invalidates previously opened root handles; reopen them before retrying. Exceptions must
+escape the callback to roll back the entire statement; a caught exception is not a rollback request.
+Cancellation before the commit boundary restores the before-image. An ambiguous response after
+durable commit still requires caller-owned idempotency; this API does not add automatic retries.
+
+This does not add graph catalog registration inside statements, multi-statement transactions,
+or executor-level SQL DML/OUTPUT semantics. No database format change is required.
+
+Evidence: `GraphStatementTests` covers successful mixed mutations, referential failure,
+cancellation, traversal resource exhaustion, retry, index restoration, reopen recovery from
+an active journal, and expired handles/enumerators. The journal recovery test reconstructs
+interrupted on-disk state; it is not a power-loss qualification test.

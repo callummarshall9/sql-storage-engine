@@ -7,18 +7,21 @@ using sql_storage_engine.Tables;
 
 namespace sql_storage_engine;
 
-internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine owner, long generation)
+internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine owner, long generation,
+    Func<bool>? isActive = null)
     : IStorageGraphEdgeTable
 {
+    private readonly GraphHandleScope _scope = new(owner, generation, isActive);
+
     public CatalogTable Definition => storage.Definition;
     public CatalogGraphTable GraphDefinition => Definition.Graph!;
 
     public async ValueTask<GraphEdgeId> InsertAsync(GraphNodeId fromNodeId, GraphNodeId toNodeId, Row row,
         CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         GraphStorageRuntime.ValidatePayload(row, Definition, 3, nameof(row));
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(fromNodeId, GraphDefinition.FromNodeTableId!.Value, nameof(fromNodeId),
             cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(toNodeId, GraphDefinition.ToNodeTableId!.Value, nameof(toNodeId),
@@ -27,16 +30,16 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         var result = await storage.InsertGraphAsync(GraphStorageRuntime.Append(row, edgeId.ToSqlValue(),
                 fromNodeId.ToSqlValue(), toNodeId.ToSqlValue()), cancellationToken).ConfigureAwait(false);
         if (!result.Inserted) throw new DuplicateKeyIgnoredException(result.Warnings.Single());
-        await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
+        await _scope.PublishAsync(cancellationToken).ConfigureAwait(false);
         return edgeId;
     }
 
     public async ValueTask<StoredGraphEdge?> GetAsync(GraphEdgeId edgeId,
         CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         return rowId is null ? null : await ReadAsync(rowId.Value, cancellationToken).ConfigureAwait(false);
     }
@@ -44,23 +47,23 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
     public async ValueTask<bool> UpdateAsync(GraphEdgeId edgeId, RowUpdate update,
         CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
         GraphStorageRuntime.ValidatePayloadUpdate(update, Definition.Columns.Count - 3);
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.UpdateGraphAsync(rowId.Value, update, cancellationToken).ConfigureAwait(false);
-        if (result.Updated) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
+        if (result.Updated) await _scope.PublishAsync(cancellationToken).ConfigureAwait(false);
         return result.Updated;
     }
 
     public async ValueTask<bool> ReconnectAsync(GraphEdgeId edgeId, GraphNodeId fromNodeId,
         GraphNodeId toNodeId, CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(fromNodeId, GraphDefinition.FromNodeTableId!.Value, nameof(fromNodeId),
             cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(toNodeId, GraphDefinition.ToNodeTableId!.Value, nameof(toNodeId),
@@ -71,19 +74,19 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
             new ColumnUpdate(Definition.Columns.Count - 2, fromNodeId.ToSqlValue()),
             new ColumnUpdate(Definition.Columns.Count - 1, toNodeId.ToSqlValue())
         ]), cancellationToken).ConfigureAwait(false);
-        if (result.Updated) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
+        if (result.Updated) await _scope.PublishAsync(cancellationToken).ConfigureAwait(false);
         return result.Updated;
     }
 
     public async ValueTask<bool> DeleteAsync(GraphEdgeId edgeId, CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.DeleteAsync(rowId.Value, cancellationToken).ConfigureAwait(false);
-        if (result.Deleted) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
+        if (result.Deleted) await _scope.PublishAsync(cancellationToken).ConfigureAwait(false);
         return result.Deleted;
     }
 
@@ -91,10 +94,10 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         GraphTraversalOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        owner.EnsureGraphHandleCurrent(generation);
+        _scope.EnsureCurrent();
         if (!Enum.IsDefined(direction)) throw new ArgumentOutOfRangeException(nameof(direction));
         options ??= new GraphTraversalOptions();
-        using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
         var outgoing = GraphDefinition.FromNodeTableId == nodeId.TableId;
         var incoming = GraphDefinition.ToNodeTableId == nodeId.TableId;
         if (direction == GraphEdgeDirection.Outgoing && !outgoing ||
@@ -123,7 +126,11 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
                 cancellationToken).ConfigureAwait(false);
 
         foreach (var rowId in rows.OrderBy(row => row, Comparer<RowId>.Create(GraphStorageRuntime.Compare)))
+        {
+            _scope.EnsureCurrent();
+            cancellationToken.ThrowIfCancellationRequested();
             yield return await ReadAsync(rowId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private ValueTask<RowId?> FindAsync(GraphEdgeId edgeId, CancellationToken cancellationToken) =>

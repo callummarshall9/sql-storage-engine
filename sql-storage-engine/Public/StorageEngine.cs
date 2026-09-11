@@ -804,26 +804,10 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         public void Dispose() { }
     }
 
-    private sealed class StorageStatement(StorageEngine owner) : IStorageStatement
-    {
-        private bool _active = true;
-        public async ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name,
-            IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_active) throw new InvalidOperationException("The statement scope has completed.");
-            return await owner.CreateTableAsync(name, columns, checkConstraints, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        public async ValueTask<IStorageTable> OpenTableAsync(TableId tableId,
-            CancellationToken cancellationToken = default)
-        {
-            if (!_active) throw new InvalidOperationException("The statement scope has completed.");
-            var storage = await owner.OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
-            return new StorageTable(storage, owner, coordinate: false, flushMutations: false, () => _active);
-        }
-        public void Complete() => _active = false;
-    }
+    internal long HandleGeneration => Volatile.Read(ref _handleGeneration);
+
+    internal IStorageTable CreateStatementTable(TableStorage storage, Func<bool> isActive) =>
+        new StorageTable(storage, this, coordinate: false, flushMutations: false, isActive);
 
     private sealed class StorageIndex(CatalogIndex definition, CatalogTable table, PersistentBPlusTree tree,
         StorageEngine owner) : IStorageIndex
