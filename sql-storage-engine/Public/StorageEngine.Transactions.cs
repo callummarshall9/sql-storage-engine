@@ -6,7 +6,7 @@ namespace sql_storage_engine;
 public sealed partial class StorageEngine
 {
     internal IAsyncEnumerable<T> TrackStream<T>(IAsyncEnumerable<T> source, bool scoped) =>
-        scoped && _accessGate.Current is { } scope ? new StorageScopedEnumerable<T>(source, scope) : source;
+        scoped && _accessGate.Current is { } scope ? new StorageScopedEnumerable<T>(source, scope, _accessGate) : source;
 
     internal Task? PendingTransactionCleanup { get; private set; }
     internal void RetainPendingTransaction(Task cleanup)

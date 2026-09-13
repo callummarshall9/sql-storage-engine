@@ -351,7 +351,7 @@ and catalog format 10 remain compatible. See [graph DDL review](docs/graph-ddl-r
 
 ## Explicit transaction lifetime
 
-Version 1.13.0 adds `BeginTransactionAsync(new StorageTransactionOptions(timeout))`. Use the returned
+Version 1.13.1 adds `BeginTransactionAsync(new StorageTransactionOptions(timeout))`. Use the returned
 `IStorageTransaction` for multiple awaited statement callbacks, then inspect its commit/rollback receipt.
 Reads and writes enlist through each callback's `IStorageTransactionContext`. See
 [the supported profile and recovery contract](https://github.com/callummarshall9/sql-storage-engine/blob/master/docs/explicit-transactions.md) before enabling this API.

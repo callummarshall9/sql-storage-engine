@@ -2,7 +2,7 @@
 
 ## Implementation
 
-Version 1.13.0 adds an owned high-level root transaction handle, Serializable database lease, callback enlistment,
+Version 1.13.1 adds an owned high-level root transaction handle, Serializable database lease, callback enlistment,
 root undo journal, durable terminal receipts, recovery, and receipt release. Public table/index implementations
 were moved into individual files. The existing low-level WAL transaction API is not silently mixed into this path.
 
@@ -40,7 +40,7 @@ profile and inspect receipts; no SQL transaction command is enabled by this pack
 
 ## Exact coverage
 
-28 new tests (460 total) cover success, root/local rollback, reads, heap/index changes, isolation, expiry,
+29 new tests (461 total) cover success, root/local rollback, reads, heap/index changes, isolation, expiry,
 callback cancellation, disposal, exact timeout/quota boundaries, streams, file ownership, faults and three actual
 process-exit scenarios. Debug and Release pass with warnings as errors. No existing test was weakened.
 The crash probe is built by the solution in both configurations. Focused tests and full regression tests pass.
@@ -52,3 +52,7 @@ A measured local Debug run used a 41,024-byte root journal: one callback complet
 snapshot; configured maximum bytes bound growth, not callback count or total I/O. Tests retain their measurements
 through `ExplicitTransactionResourceTests` output. Package publication and downstream provenance verification are
 recorded by the execution-engine delivery review after publication.
+
+Downstream graph DML qualification found a sequential scan/point-read regression in 1.13.0. Patch 1.13.1 reserves
+the callback operation slot per MoveNext, retaining stream ownership until callback completion. The interleaved read
+regression passes alongside all existing storage tests; consumers should adopt 1.13.1.

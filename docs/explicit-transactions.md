@@ -1,4 +1,4 @@
-# Explicit storage transactions (1.13.0)
+# Explicit storage transactions (1.13.1)
 
 `StorageEngine.BeginTransactionAsync` returns an owned `IStorageTransaction`. Its lifetime spans multiple awaited
 `ExecuteStatementAsync` calls; no callback is retained to represent the root. The callback receives an

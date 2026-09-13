@@ -1,6 +1,6 @@
 namespace sql_storage_engine;
 
-internal sealed class StorageScopedEnumerator<T>(IAsyncEnumerator<T> inner) : IAsyncEnumerator<T>
+internal sealed class StorageScopedEnumerator<T>(IAsyncEnumerator<T> inner, StorageGate gate) : IAsyncEnumerator<T>
 {
     private readonly SemaphoreSlim _operation = new(1, 1);
     private bool _disposed;
@@ -12,6 +12,8 @@ internal sealed class StorageScopedEnumerator<T>(IAsyncEnumerator<T> inner) : IA
         try
         {
             if (_disposed) throw new InvalidOperationException("The statement scope has completed.");
+            using var lease = await gate.EnterAsync(CancellationToken.None).ConfigureAwait(false);
+            using var scope = lease.Activate();
             return await inner.MoveNextAsync().ConfigureAwait(false);
         }
         finally { _operation.Release(); }
