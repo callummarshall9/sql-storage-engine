@@ -324,3 +324,27 @@ The workflow restores, runs the entire Release test suite with warnings treated 
 
 If organization policy disables package writes for `GITHUB_TOKEN`, enable **Settings → Actions → General → Workflow
 permissions → Read and write permissions**. Consumers still authenticate separately with `read:packages`.
+
+
+## Atomic graph table creation (1.12.0)
+
+Create graph tables inside `ExecuteStatementAsync`, using `statement.CreateGraphNodeTableAsync(name, payloadColumns, token)`
+and `statement.CreateGraphEdgeTableAsync(name, payloadColumns, fromNodeTableId, toNodeTableId, token)`. The storage owner
+creates the trailing hidden identity/endpoint columns and all unique identity/directional adjacency indexes. Do not supply
+generated columns or `$`-prefixed payload names. Both endpoints must be registered node tables in this database; creating
+node and edge tables in one callback is supported. Await every operation before returning from the callback.
+
+The table, indexes and graph registration share the existing durable statement journal. Any DDL failure poisons the
+statement, even if caught by the callback, so partial catalog state cannot commit. Cancellation and callback failure roll
+back the whole statement; reopen recovers an interrupted active journal. Root catalog calls outside the callback retain
+their prior behavior and must not run concurrently with a statement. This is writer serialization and crash atomicity,
+not concurrent-reader snapshot isolation.
+
+This is new-table creation only: duplicate names (including populated ordinary tables) reject, without conversion. Edge
+metadata enforces one ordered endpoint-table pair, with intrinsic unnamed NO ACTION referential behavior. Self-pairs and
+parallel edges are supported. Named/multiple/optional connection constraints, CASCADE, ALTER/DROP/rename, and a public
+DDL authorization model are not exposed. Storage callers are trusted hosts; a SQL adapter must authorize and reject
+unsupported shapes before opening a statement. No generic catalog escape hatch or persistence-format change is added.
+
+IStorageStatement gains two methods; external implementations must implement them when rebuilding. Existing readers
+and catalog format 10 remain compatible. See [graph DDL review](docs/graph-ddl-review.md) for qualification evidence.

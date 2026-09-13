@@ -1,0 +1,26 @@
+{
+  "version": "1.12.0",
+  "runtime": "10.0.12",
+  "timestampFrequency": 1000000000,
+  "notes": "1/5/10 node-and-edge pairs, each pair created in one durable statement; total process allocations and database bytes. Host-specific observations, no timing threshold or comparison claim.",
+  "measurements": [
+    {
+      "count": 1,
+      "ticks": 60047063,
+      "allocatedBytes": 2844584,
+      "fileBytes": 122880
+    },
+    {
+      "count": 5,
+      "ticks": 36478706,
+      "allocatedBytes": 15510536,
+      "fileBytes": 581632
+    },
+    {
+      "count": 10,
+      "ticks": 71145092,
+      "allocatedBytes": 34685608,
+      "fileBytes": 1236992
+    }
+  ]
+}

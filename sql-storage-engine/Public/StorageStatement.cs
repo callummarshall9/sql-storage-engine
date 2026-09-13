@@ -6,6 +6,26 @@ namespace sql_storage_engine;
 internal sealed class StorageStatement(StorageEngine owner) : IStorageStatement
 {
     private volatile bool _active = true;
+    private bool _ddlFailed;
+    internal void ThrowIfDdlFailed()
+    {
+        if (_ddlFailed) throw new InvalidOperationException("Graph DDL failed; the statement must roll back.");
+    }
+    public ValueTask<CatalogTable> CreateGraphNodeTableAsync(CatalogTableName name,
+        IEnumerable<CatalogColumn> payloadColumns, CancellationToken cancellationToken = default) =>
+        CreateGraphAsync(name, payloadColumns, null, null, cancellationToken);
+    public ValueTask<CatalogTable> CreateGraphEdgeTableAsync(CatalogTableName name,
+        IEnumerable<CatalogColumn> payloadColumns, TableId fromNodeTableId, TableId toNodeTableId,
+        CancellationToken cancellationToken = default) =>
+        CreateGraphAsync(name, payloadColumns, fromNodeTableId, toNodeTableId, cancellationToken);
+    private async ValueTask<CatalogTable> CreateGraphAsync(CatalogTableName name,
+        IEnumerable<CatalogColumn> payloadColumns, TableId? from, TableId? to, CancellationToken token)
+    {
+        if (!_active) throw new InvalidOperationException("The statement scope has completed.");
+        ThrowIfDdlFailed();
+        try { return await StorageGraphDdl.CreateAsync(owner, name, payloadColumns, from, to, token).ConfigureAwait(false); }
+        catch { _ddlFailed = true; throw; }
+    }
     public async ValueTask<CatalogTable> CreateTableAsync(CatalogTableName name,
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
         CancellationToken cancellationToken = default)

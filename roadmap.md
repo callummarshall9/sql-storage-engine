@@ -934,3 +934,11 @@ The roadmap succeeds when a SQL executor can:
 8. Use the engine without depending on its page or B+ tree internals.
 
 The product is not complete merely when rows can be written to disk. It becomes a storage engine when those rows remain correct across indexing, updates, failures, recovery, and continued evolution.
+
+
+## 1.12.0 atomic graph creation prerequisite
+
+Statement-owned creation now supplies generated columns, required indexes and graph registration as one durable unit.
+The [graph DDL review](docs/graph-ddl-review.md) records correctness, persistence, failure/recovery, compatibility and
+validation. The supported connection profile remains one intrinsic ordered pair with NO ACTION. Named/multiple constraints
+and ALTER/DROP/CASCADE require separate typed catalog/dependency and lifecycle designs; no generic escape hatch is added.

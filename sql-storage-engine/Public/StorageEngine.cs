@@ -364,6 +364,12 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     }
 
     internal CatalogService GraphCatalog => _catalog;
+    internal Action<GraphDdlStage>? GraphDdlObserver { get; set; }
+    internal void ObserveGraphDdl(GraphDdlStage stage, CancellationToken token)
+    {
+        GraphDdlObserver?.Invoke(stage);
+        token.ThrowIfCancellationRequested();
+    }
     internal void EnsureGraphHandleCurrent(long generation)
     {
         ThrowIfDisposed();
@@ -472,6 +478,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
             await FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
             journal = await StatementJournal.CreateAsync(_database.DatabasePath, cancellationToken).ConfigureAwait(false);
             await operation(statement, cancellationToken).ConfigureAwait(false);
+            statement.ThrowIfDdlFailed();
             cancellationToken.ThrowIfCancellationRequested();
             statement.Complete();
             await FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
