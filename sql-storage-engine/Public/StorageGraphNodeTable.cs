@@ -20,6 +20,7 @@ internal sealed class StorageGraphNodeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.ValidatePayload(row, Definition, 1, nameof(row));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var nodeId = new GraphNodeId(owner.DatabaseId, Definition.Id, Definition.SchemaVersion, Guid.NewGuid());
         var result = await storage.InsertGraphAsync(GraphStorageRuntime.Append(row, nodeId.ToSqlValue()), cancellationToken)
             .ConfigureAwait(false);
@@ -34,6 +35,7 @@ internal sealed class StorageGraphNodeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(nodeId, owner.DatabaseId, Definition, nameof(nodeId));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(nodeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return null;
         var found = await storage.TryGetAsync(rowId.Value, cancellationToken).ConfigureAwait(false);
@@ -41,11 +43,16 @@ internal sealed class StorageGraphNodeTable(TableStorage storage, StorageEngine 
         return ToNode(found.Row!);
     }
 
-    public async IAsyncEnumerable<StoredGraphNode> ScanAsync(
+    public IAsyncEnumerable<StoredGraphNode> ScanAsync(
+        CancellationToken cancellationToken = default) =>
+        owner.TrackStream(ScanAsyncCore(cancellationToken), isActive is not null);
+
+    private async IAsyncEnumerable<StoredGraphNode> ScanAsyncCore(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _scope.EnsureCurrent();
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         await foreach (var row in storage.ScanAsync(cancellationToken).ConfigureAwait(false))
         {
             _scope.EnsureCurrent();
@@ -61,6 +68,7 @@ internal sealed class StorageGraphNodeTable(TableStorage storage, StorageEngine 
         GraphStorageRuntime.Validate(nodeId, owner.DatabaseId, Definition, nameof(nodeId));
         GraphStorageRuntime.ValidatePayloadUpdate(update, Definition.Columns.Count - 1);
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(nodeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.UpdateGraphAsync(rowId.Value, update, cancellationToken).ConfigureAwait(false);
@@ -73,6 +81,7 @@ internal sealed class StorageGraphNodeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(nodeId, owner.DatabaseId, Definition, nameof(nodeId));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(nodeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         await EnsureUnreferencedAsync(nodeId, cancellationToken).ConfigureAwait(false);

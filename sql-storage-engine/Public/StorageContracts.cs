@@ -295,6 +295,9 @@ public interface IStorageIndex
 /// <summary>The supported high-level boundary between a SQL engine and this storage package.</summary>
 public interface IStorageEngine : IAsyncDisposable
 {
+    ValueTask<IStorageTransaction> BeginTransactionAsync(StorageTransactionOptions options, CancellationToken cancellationToken = default);
+    ValueTask<StorageTransactionReceipt> ResolveTransactionAsync(StorageTransactionIdentity identity, CancellationToken cancellationToken = default);
+    ValueTask ReleaseTransactionReceiptAsync(StorageTransactionIdentity identity, CancellationToken cancellationToken = default);
     DatabaseId DatabaseId { get; }
     IStorageCatalog Catalog { get; }
     ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,

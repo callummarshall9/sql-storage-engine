@@ -24,6 +24,9 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
         _openMode = openMode;
     }
 
+    internal long? MaximumAllocatedBytes { get; set; }
+    internal void RestoreLength(long length) => _store.RestoreLength(length);
+
     public int PageSize => _store.PageSize;
     internal string DatabasePath => _store.Path;
     public DatabaseHeader Header => _header;
@@ -182,6 +185,8 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
             else
             {
                 id = _header.NextPageId;
+                if (MaximumAllocatedBytes is { } maximum && checked((id.Value + 1) * (ulong)PageSize) > (ulong)maximum)
+                    throw new InvalidOperationException("Transaction journal quota exceeded.");
                 _header = _header with { NextPageId = new PageId(checked(id.Value + 1)) };
             }
             var page = CreatePage(id, pageType);

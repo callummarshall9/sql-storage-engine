@@ -24,6 +24,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\sql-storage-engine\sql-storage-engine.csproj" />
+      <ProjectReference Include="../tests/TransactionCrashProbe/TransactionCrashProbe.csproj" ReferenceOutputAssembly="false" />
     </ItemGroup>
 
     <ItemGroup>

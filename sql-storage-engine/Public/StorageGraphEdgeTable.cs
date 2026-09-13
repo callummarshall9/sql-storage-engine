@@ -22,6 +22,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.ValidatePayload(row, Definition, 3, nameof(row));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         await EnsureNodeExistsAsync(fromNodeId, GraphDefinition.FromNodeTableId!.Value, nameof(fromNodeId),
             cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(toNodeId, GraphDefinition.ToNodeTableId!.Value, nameof(toNodeId),
@@ -40,6 +41,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         return rowId is null ? null : await ReadAsync(rowId.Value, cancellationToken).ConfigureAwait(false);
     }
@@ -51,6 +53,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
         GraphStorageRuntime.ValidatePayloadUpdate(update, Definition.Columns.Count - 3);
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.UpdateGraphAsync(rowId.Value, update, cancellationToken).ConfigureAwait(false);
@@ -69,6 +72,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
         GraphStorageRuntime.ValidatePayloadUpdate(update, Definition.Columns.Count - 3);
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         await EnsureNodeExistsAsync(fromNodeId, GraphDefinition.FromNodeTableId!.Value, nameof(fromNodeId),
             cancellationToken).ConfigureAwait(false);
         await EnsureNodeExistsAsync(toNodeId, GraphDefinition.ToNodeTableId!.Value, nameof(toNodeId),
@@ -89,6 +93,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         _scope.EnsureCurrent();
         GraphStorageRuntime.Validate(edgeId, owner.DatabaseId, Definition, nameof(edgeId));
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var rowId = await FindAsync(edgeId, cancellationToken).ConfigureAwait(false);
         if (rowId is null) return false;
         var result = await storage.DeleteAsync(rowId.Value, cancellationToken).ConfigureAwait(false);
@@ -96,7 +101,12 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         return result.Deleted;
     }
 
-    public async IAsyncEnumerable<StoredGraphEdge> TraverseAsync(GraphNodeId nodeId, GraphEdgeDirection direction,
+    public IAsyncEnumerable<StoredGraphEdge> TraverseAsync(GraphNodeId nodeId, GraphEdgeDirection direction,
+        GraphTraversalOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        owner.TrackStream(TraverseAsyncCore(nodeId, direction, options, cancellationToken), isActive is not null);
+
+    private async IAsyncEnumerable<StoredGraphEdge> TraverseAsyncCore(GraphNodeId nodeId, GraphEdgeDirection direction,
         GraphTraversalOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
@@ -104,6 +114,7 @@ internal sealed class StorageGraphEdgeTable(TableStorage storage, StorageEngine 
         if (!Enum.IsDefined(direction)) throw new ArgumentOutOfRangeException(nameof(direction));
         options ??= new GraphTraversalOptions();
         using var lease = await _scope.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = owner.ActivateGate(lease);
         var outgoing = GraphDefinition.FromNodeTableId == nodeId.TableId;
         var incoming = GraphDefinition.ToNodeTableId == nodeId.TableId;
         if (direction == GraphEdgeDirection.Outgoing && !outgoing ||

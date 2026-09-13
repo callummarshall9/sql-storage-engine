@@ -15,8 +15,7 @@ internal sealed class GraphHandleScope(StorageEngine owner, long generation, Fun
     {
         cancellationToken.ThrowIfCancellationRequested();
         EnsureCurrent();
-        if (isActive is not null) return this;
-        var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
+        var lease = await owner.EnterStatementGateAsync(cancellationToken, reentrant: isActive is not null).ConfigureAwait(false);
         try
         {
             // A waiting root handle may have been invalidated by statement rollback.

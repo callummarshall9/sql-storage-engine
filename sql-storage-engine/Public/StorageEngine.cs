@@ -15,7 +15,7 @@ namespace sql_storage_engine;
 /// Owns a database file and exposes logical catalog and row operations. Consumers should depend on
 /// <see cref="IStorageEngine"/>, <see cref="IStorageCatalog"/>, and <see cref="IStorageTable"/>.
 /// </summary>
-public sealed class StorageEngine : IStorageEngine, IStorageCatalog
+public sealed partial class StorageEngine : IStorageEngine, IStorageCatalog
 {
     private readonly PageDatabase _database;
     private readonly BufferPool _bufferPool;
@@ -23,9 +23,10 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     private readonly OverflowManager _overflow;
     private readonly int _inlineValueThreshold;
     private readonly TimeProvider _timeProvider;
-    private readonly SemaphoreSlim _statementGate = new(1, 1);
+    private readonly StorageGate _accessGate = new();
     private long _handleGeneration;
     private bool _disposed;
+    private IDisposable? _fileLease;
 
     private StorageEngine(PageDatabase database, BufferPool bufferPool, CatalogService catalog,
         StorageEngineOptions options)
@@ -40,26 +41,37 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
 
     public IStorageCatalog Catalog => this;
     public DatabaseId DatabaseId => _database.Header.DatabaseId;
-    public IReadOnlyList<CatalogTable> Tables => _catalog.Tables;
-    public IReadOnlyList<CatalogIndex> Indexes => _catalog.Indexes;
-    public IReadOnlyList<CatalogScalarType> ScalarTypes => _catalog.ScalarTypes;
-    public IReadOnlyList<CatalogTableType> TableTypes => _catalog.TableTypes;
-    public IReadOnlyList<SqlXmlSchemaCollection> XmlSchemaCollections => _catalog.XmlSchemaCollections;
-    public IReadOnlyList<CatalogAssembly> Assemblies => _catalog.Assemblies;
+    public IReadOnlyList<CatalogTable> Tables => ReadCatalog(() => _catalog.Tables.ToArray());
+    public IReadOnlyList<CatalogIndex> Indexes => ReadCatalog(() => _catalog.Indexes.ToArray());
+    public IReadOnlyList<CatalogScalarType> ScalarTypes => ReadCatalog(() => _catalog.ScalarTypes.ToArray());
+    public IReadOnlyList<CatalogTableType> TableTypes => ReadCatalog(() => _catalog.TableTypes.ToArray());
+    public IReadOnlyList<SqlXmlSchemaCollection> XmlSchemaCollections => ReadCatalog(() => _catalog.XmlSchemaCollections.ToArray());
+    public IReadOnlyList<CatalogAssembly> Assemblies => ReadCatalog(() => _catalog.Assemblies.ToArray());
     public string DefaultCollation => _database.Header.DefaultCollation;
+
+    private T ReadCatalog<T>(Func<T> read)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed(); return read();
+    }
 
     public static async ValueTask<StorageEngine> CreateAsync(string path, StorageEngineOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         options ??= new StorageEngineOptions();
         Validate(options);
-        var database = await PageDatabase.CreateAsync(path, options.PageSize, options.DefaultCollation, cancellationToken).ConfigureAwait(false);
+        var fileLease = StorageEngineFileLease.Acquire(path, creating: true);
         try
         {
-            var pool = new BufferPool(database, options.BufferPoolCapacity, leaveOpen: true);
-            return new StorageEngine(database, pool, CatalogService.CreateEmpty(database, database, pool), options);
+            var database = await PageDatabase.CreateAsync(path, options.PageSize, options.DefaultCollation, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var pool = new BufferPool(database, options.BufferPoolCapacity, leaveOpen: true);
+                return new StorageEngine(database, pool, CatalogService.CreateEmpty(database, database, pool), options) { _fileLease = fileLease };
+            }
+            catch { await database.DisposeAsync().ConfigureAwait(false); throw; }
         }
-        catch { await database.DisposeAsync().ConfigureAwait(false); throw; }
+        catch { fileLease.Dispose(); throw; }
     }
 
     public static async ValueTask<StorageEngine> OpenAsync(string path, StorageEngineOptions? options = null,
@@ -67,29 +79,52 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     {
         options ??= new StorageEngineOptions();
         Validate(options);
-        var database = await PageDatabase.OpenAsync(path, cancellationToken).ConfigureAwait(false);
-        BufferPool? pool = null;
+        var fileLease = StorageEngineFileLease.Acquire(path, creating: false);
         try
         {
-            pool = new BufferPool(database, options.BufferPoolCapacity, leaveOpen: true);
-            var catalog = database.Header.CatalogRootPageId is { } root
-                ? await CatalogService.OpenAsync(root, database, database, pool, cancellationToken).ConfigureAwait(false)
-                : CatalogService.CreateEmpty(database, database, pool);
-            return new StorageEngine(database, pool, catalog, options);
+            await StorageTransactionFiles.RecoverAsync(Path.GetFullPath(path), cancellationToken).ConfigureAwait(false);
+            var database = await PageDatabase.OpenAsync(path, cancellationToken).ConfigureAwait(false);
+            BufferPool? pool = null;
+            try
+            {
+                pool = new BufferPool(database, options.BufferPoolCapacity, leaveOpen: true);
+                var catalog = database.Header.CatalogRootPageId is { } root
+                    ? await CatalogService.OpenAsync(root, database, database, pool, cancellationToken).ConfigureAwait(false)
+                    : CatalogService.CreateEmpty(database, database, pool);
+                return new StorageEngine(database, pool, catalog, options) { _fileLease = fileLease };
+            }
+            catch
+            {
+                if (pool is not null) await pool.DisposeAsync().ConfigureAwait(false);
+                await database.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
         }
-        catch
-        {
-            if (pool is not null) await pool.DisposeAsync().ConfigureAwait(false);
-            await database.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
+        catch { fileLease.Dispose(); throw; }
     }
 
-    public bool TryGetTable(string name, out CatalogTable? table) => _catalog.TryOpenTable(name, out table);
-    public bool TryGetTable(CatalogTableName name, out CatalogTable? table) => _catalog.TryOpenTable(name, out table);
-    public bool TryGetTable(TableId id, out CatalogTable? table) => _catalog.TryOpenTable(id, out table);
+    public bool TryGetTable(string name, out CatalogTable? table)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenTable(name, out table);
+    }
+    public bool TryGetTable(CatalogTableName name, out CatalogTable? table)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenTable(name, out table);
+    }
+    public bool TryGetTable(TableId id, out CatalogTable? table)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenTable(id, out table);
+    }
     public bool TryGetTemporalHistory(TableId currentTableId, out CatalogTable? historyTable)
     {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
         historyTable = _catalog.TryOpenTable(currentTableId, out var current) &&
                        current!.SystemVersioning is { } temporal &&
                        _catalog.TryOpenTable(temporal.HistoryTableId, out var history)
@@ -99,21 +134,48 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     }
     public bool TryGetTemporalCurrent(TableId historyTableId, out CatalogTable? currentTable)
     {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
         currentTable = _catalog.Tables.SingleOrDefault(table =>
             table.SystemVersioning?.HistoryTableId == historyTableId);
         return currentTable is not null;
     }
-    public bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index) =>
-        _catalog.TryOpenIndex(name, tableId, out index);
-    public IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId) =>
-        _catalog.Indexes.Where(index => index.TableId == tableId).ToArray();
-    public bool TryGetScalarType(string schemaName, string name, out CatalogScalarType? type) =>
-        _catalog.TryOpenScalarType(schemaName, name, out type);
-    public bool TryGetTableType(string schemaName, string name, out CatalogTableType? type) =>
-        _catalog.TryOpenTableType(schemaName, name, out type);
-    public bool TryGetXmlSchemaCollection(string schemaName, string name, out SqlXmlSchemaCollection? collection) =>
-        _catalog.TryOpenXmlSchemaCollection(schemaName, name, out collection);
-    public bool TryGetAssembly(string name, out CatalogAssembly? assembly) => _catalog.TryOpenAssembly(name, out assembly);
+    public bool TryGetIndex(TableId tableId, string name, out CatalogIndex? index)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenIndex(name, tableId, out index);
+    }
+    public IReadOnlyList<CatalogIndex> GetIndexes(TableId tableId)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.Indexes.Where(index => index.TableId == tableId).ToArray();
+    }
+    public bool TryGetScalarType(string schemaName, string name, out CatalogScalarType? type)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenScalarType(schemaName, name, out type);
+    }
+    public bool TryGetTableType(string schemaName, string name, out CatalogTableType? type)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenTableType(schemaName, name, out type);
+    }
+    public bool TryGetXmlSchemaCollection(string schemaName, string name, out SqlXmlSchemaCollection? collection)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenXmlSchemaCollection(schemaName, name, out collection);
+    }
+    public bool TryGetAssembly(string name, out CatalogAssembly? assembly)
+    {
+        using var lease = _accessGate.EnterImmediate(); using var scope = lease.Activate();
+        ThrowIfDisposed();
+        return _catalog.TryOpenAssembly(name, out assembly);
+    }
 
     public async ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         CancellationToken cancellationToken = default)
@@ -122,6 +184,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<CatalogTable> CreateTableAsync(string name, IEnumerable<CatalogColumn> columns,
         IEnumerable<CatalogCheckConstraint> checkConstraints, CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var table = await _catalog.CreateTableAsync(name, 1, ApplyDatabaseCollation(columns), checkConstraints, cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
@@ -132,6 +196,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         IEnumerable<CatalogColumn> columns, IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var table = await _catalog.CreateTableAsync(name, 1, ApplyDatabaseCollation(columns), checkConstraints,
             cancellationToken).ConfigureAwait(false);
@@ -145,6 +211,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         IEnumerable<CatalogCheckConstraint>? checkConstraints = null,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(name);
         var columnSnapshot = ApplyDatabaseCollation(columns).ToArray();
@@ -158,6 +226,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<CatalogIndex> CreateIndexAsync(string name, TableId tableId, bool isUnique,
         IEnumerable<CatalogIndexedColumn> columns, CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var index = await _catalog.CreateIndexAsync(name, tableId, isUnique, columns, cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
@@ -168,6 +238,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         IEnumerable<CatalogIndexedColumn> columns, CatalogBTreeIndexOptions options,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var index = await _catalog.CreateIndexAsync(name, tableId, isUnique, columns, options, cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return index;
@@ -177,6 +249,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         CatalogIndexedColumn column, CatalogSpecializedIndexOptions options,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var index = await _catalog.CreateSpecializedIndexAsync(name, tableId, column, options, cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
@@ -187,17 +261,15 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         IndexId identityIndexId, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
-            var table = await _catalog.RegisterGraphNodeTableAsync(tableId, identityColumnId, identityIndexId,
-                cancellationToken).ConfigureAwait(false);
-            await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _handleGeneration);
-            return table;
-        }
-        finally { _statementGate.Release(); }
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
+        ThrowIfDisposed();
+        await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
+        var table = await _catalog.RegisterGraphNodeTableAsync(tableId, identityColumnId, identityIndexId,
+            cancellationToken).ConfigureAwait(false);
+        await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _handleGeneration);
+        return table;
     }
 
     public async ValueTask<CatalogTable> RegisterGraphEdgeTableAsync(TableId tableId, ColumnId identityColumnId,
@@ -206,18 +278,16 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
-            var table = await _catalog.RegisterGraphEdgeTableAsync(tableId, identityColumnId, identityIndexId,
-                fromNodeTableId, fromNodeColumnId, outgoingIndexId, toNodeTableId, toNodeColumnId,
-                incomingIndexId, cancellationToken).ConfigureAwait(false);
-            await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
-            Interlocked.Increment(ref _handleGeneration);
-            return table;
-        }
-        finally { _statementGate.Release(); }
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
+        ThrowIfDisposed();
+        await EnsureTableEmptyAsync(tableId, cancellationToken).ConfigureAwait(false);
+        var table = await _catalog.RegisterGraphEdgeTableAsync(tableId, identityColumnId, identityIndexId,
+            fromNodeTableId, fromNodeColumnId, outgoingIndexId, toNodeTableId, toNodeColumnId,
+            incomingIndexId, cancellationToken).ConfigureAwait(false);
+        await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _handleGeneration);
+        return table;
     }
 
     private async ValueTask EnsureTableEmptyAsync(TableId tableId, CancellationToken cancellationToken)
@@ -231,6 +301,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<CatalogScalarType> CreateScalarTypeAsync(SqlType definition,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var type = await _catalog.CreateScalarTypeAsync(definition.ApplyDefaultCollation(DefaultCollation), cancellationToken).ConfigureAwait(false);
         await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
@@ -247,6 +319,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         IEnumerable<CatalogCheckConstraint>? checkConstraints, bool isMemoryOptimized,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var type = await _catalog.CreateTableTypeAsync(schemaName, name, ApplyDatabaseCollation(columns), indexes, checkConstraints,
             isMemoryOptimized, cancellationToken)
@@ -257,22 +331,37 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
 
     public async ValueTask<SqlXmlSchemaCollection> CreateXmlSchemaCollectionAsync(SqlXmlSchemaCollection collection,
         CancellationToken cancellationToken = default)
-    { var result = await _catalog.CreateXmlSchemaCollectionAsync(collection, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result; }
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate(); var result = await _catalog.CreateXmlSchemaCollectionAsync(collection, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result;
+    }
 
     public async ValueTask<SqlXmlSchemaCollection> AlterXmlSchemaCollectionAsync(string schemaName, string name,
         IEnumerable<string> additionalDefinitions, CancellationToken cancellationToken = default)
-    { var result = await _catalog.AlterXmlSchemaCollectionAsync(schemaName, name, additionalDefinitions, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result; }
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate(); var result = await _catalog.AlterXmlSchemaCollectionAsync(schemaName, name, additionalDefinitions, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result;
+    }
 
     public async ValueTask DropXmlSchemaCollectionAsync(string schemaName, string name,
         CancellationToken cancellationToken = default)
-    { await _catalog.DropXmlSchemaCollectionAsync(schemaName, name, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); }
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate(); await _catalog.DropXmlSchemaCollectionAsync(schemaName, name, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async ValueTask<CatalogAssembly> CreateAssemblyAsync(CatalogAssembly assembly,
         CancellationToken cancellationToken = default)
-    { var result = await _catalog.CreateAssemblyAsync(assembly, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result; }
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate(); var result = await _catalog.CreateAssemblyAsync(assembly, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); return result;
+    }
 
     public async ValueTask DropAssemblyAsync(string name, CancellationToken cancellationToken = default)
-    { await _catalog.DropAssemblyAsync(name, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false); }
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate(); await _catalog.DropAssemblyAsync(name, cancellationToken).ConfigureAwait(false); await PublishCatalogAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     private IEnumerable<CatalogColumn> ApplyDatabaseCollation(IEnumerable<CatalogColumn> columns)
     {
@@ -287,6 +376,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<IStorageTable> OpenTableAsync(TableId tableId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
         var generation = Volatile.Read(ref _handleGeneration);
@@ -318,7 +409,7 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         return storage;
     }
 
-    private ValueTask<SqlValue> AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind kind,
+    internal ValueTask<SqlValue> AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind kind,
         CancellationToken cancellationToken)
     {
         if (kind == CatalogGeneratedAlwaysKind.RowStart)
@@ -335,6 +426,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = _accessGate.EnterImmediate();
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         var index = _catalog.Indexes.SingleOrDefault(candidate => candidate.Id == indexId)
@@ -346,6 +439,8 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<IStorageGraphNodeTable> OpenGraphNodeTableAsync(TableId tableId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
         if (storage.Definition.Graph?.Kind != GraphTableKind.Node)
@@ -356,11 +451,21 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<IStorageGraphEdgeTable> OpenGraphEdgeTableAsync(TableId tableId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
         var storage = await OpenTableStorageAsync(tableId, cancellationToken).ConfigureAwait(false);
         if (storage.Definition.Graph?.Kind != GraphTableKind.Edge)
             throw new InvalidOperationException("The requested table is not a registered graph edge table.");
         return new StorageGraphEdgeTable(storage, this, Volatile.Read(ref _handleGeneration));
+    }
+
+    internal ValueTask<IStorageIndex> OpenScopedIndexAsync(IndexId indexId, Func<bool> active, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var index = _catalog.Indexes.Single(candidate => candidate.Id == indexId);
+        var table = _catalog.Tables.Single(candidate => candidate.Id == index.TableId);
+        return ValueTask.FromResult<IStorageIndex>(new StorageIndex(index, table, _catalog.OpenIndex(index), this, active));
     }
 
     internal CatalogService GraphCatalog => _catalog;
@@ -380,8 +485,9 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<StorageTableStatistics> GetTableStatisticsAsync(TableId tableId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
-        using var lease = await EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
         if (!_catalog.TryOpenTable(tableId, out var definition))
             throw new KeyNotFoundException($"Unknown table {tableId}.");
         var heap = await _catalog.OpenHeapAsync(definition!, cancellationToken).ConfigureAwait(false);
@@ -408,8 +514,9 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     public async ValueTask<StorageIndexStatistics> GetIndexStatisticsAsync(IndexId indexId,
         CancellationToken cancellationToken = default)
     {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
         ThrowIfDisposed();
-        using var lease = await EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
         var definition = _catalog.Indexes.SingleOrDefault(candidate => candidate.Id == indexId)
             ?? throw new KeyNotFoundException($"Unknown index {indexId}.");
         var tree = _catalog.OpenIndex(definition);
@@ -470,14 +577,24 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(operation);
-        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
+        ThrowIfDisposed();
         StatementJournal? journal = null;
         var statement = new StorageStatement(this);
         try
         {
             await FlushAndPublishAsync(cancellationToken).ConfigureAwait(false);
             journal = await StatementJournal.CreateAsync(_database.DatabasePath, cancellationToken).ConfigureAwait(false);
-            await operation(statement, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await operation(statement, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                statement.Complete();
+                await accessScope.DrainAsync().ConfigureAwait(false);
+            }
             statement.ThrowIfDdlFailed();
             cancellationToken.ThrowIfCancellationRequested();
             statement.Complete();
@@ -511,19 +628,41 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         finally
         {
             if (journal is not null) await journal.DisposeAsync().ConfigureAwait(false);
-            _statementGate.Release();
+
         }
     }
 
-    public ValueTask FlushAsync(CancellationToken cancellationToken = default)
-    { ThrowIfDisposed(); return _bufferPool.FlushAllAsync(cancellationToken); }
+    public async ValueTask FlushAsync(CancellationToken cancellationToken = default)
+    {
+        using var accessLease = await _accessGate.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var accessScope = accessLease.Activate();
+        ThrowIfDisposed();
+        await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
+        if (IsInStorageScope) throw new InvalidOperationException("Dispose storage after its callback returns.");
+        if (PendingTransactionCleanup is { IsCompleted: false })
+            throw new InvalidOperationException("Transaction cleanup is still running; retry disposal after the callback stops.");
+        if (_activeTransaction is { } transaction)
+        {
+            try { await transaction.DisposeAsync().ConfigureAwait(false); }
+            catch { _quarantined = true; }
+        }
+        if (PendingTransactionCleanup is { IsCompleted: false })
+            throw new InvalidOperationException("Transaction cleanup is still running; retry disposal after the callback stops.");
+        using var lease = await _accessGate.EnterAsync(CancellationToken.None, reentrant: false).ConfigureAwait(false);
+        if (_disposed) return;
         _disposed = true;
-        await _bufferPool.DisposeAsync().ConfigureAwait(false);
-        await _database.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            if (_quarantined) await _bufferPool.DiscardAllAsync(CancellationToken.None).ConfigureAwait(false);
+            await _bufferPool.DisposeAsync().ConfigureAwait(false);
+            await _database.DisposeAsync().ConfigureAwait(false);
+        }
+        finally { _fileLease?.Dispose(); }
     }
 
     private async ValueTask PublishCatalogAsync(CancellationToken cancellationToken)
@@ -542,479 +681,31 @@ public sealed class StorageEngine : IStorageEngine, IStorageCatalog
         _ = SqlCollation.Parse(options.DefaultCollation);
     }
 
-    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
-
-    private sealed class StorageTable(TableStorage storage, StorageEngine owner, bool coordinate,
-        bool flushMutations, Func<bool> isActive) : IStorageTable
+    internal void ThrowIfDisposed()
     {
-        public CatalogTable Definition => storage.Definition;
-        public async ValueTask<RowId> InsertAsync(Row row, CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            RejectHistoryMutation();
-            RejectGraphMutation();
-            var id = await storage.InsertAsync(row, cancellationToken).ConfigureAwait(false);
-            if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return id;
-        }
-        public async ValueTask<TableInsertResult> TryInsertAsync(Row row, CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            RejectHistoryMutation();
-            RejectGraphMutation();
-            var result = await storage.TryInsertAsync(row, cancellationToken).ConfigureAwait(false);
-            if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
-        }
-        public async ValueTask<StoredRow?> GetAsync(RowId rowId, CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            var result = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
-            return result.Found ? new StoredRow(rowId, result.Row!) : null;
-        }
-        public async ValueTask<StoredRow?> GetAsync(RowId rowId, StorageReadOptions readOptions,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(readOptions);
-            var result = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
-            return result.Found ? new StoredRow(rowId, ApplyMasking(result.Row!, readOptions)) : null;
-        }
-        public async IAsyncEnumerable<StoredRow> ScanAsync(
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            await foreach (var stored in storage.ScanAsync(cancellationToken).ConfigureAwait(false)) yield return stored;
-        }
-        public async IAsyncEnumerable<StoredRow> ScanAsync(StorageReadOptions readOptions,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(readOptions);
-            await foreach (var stored in storage.ScanAsync(cancellationToken).ConfigureAwait(false))
-                yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
-        }
-        public async IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(sample);
-            await foreach (var stored in storage.SampleAsync(sample, cancellationToken).ConfigureAwait(false))
-                yield return stored;
-        }
-        public async IAsyncEnumerable<StoredRow> SampleAsync(StorageTableSample sample,
-            StorageReadOptions readOptions,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(sample);
-            ArgumentNullException.ThrowIfNull(readOptions);
-            await foreach (var stored in storage.SampleAsync(sample, cancellationToken).ConfigureAwait(false))
-                yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
-        }
-        public async IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(query);
-            await foreach (var stored in TemporalRowsAsync(query, cancellationToken).ConfigureAwait(false))
-                yield return stored;
-        }
-        public async IAsyncEnumerable<StorageTemporalRow> TemporalScanAsync(StorageTemporalQuery query,
-            StorageReadOptions readOptions,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureActive(); using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(query);
-            ArgumentNullException.ThrowIfNull(readOptions);
-            await foreach (var stored in TemporalRowsAsync(query, cancellationToken).ConfigureAwait(false))
-                yield return stored with { Row = ApplyMasking(stored.Row, readOptions) };
-        }
-        public async ValueTask<TableUpdateResult> UpdateAsync(RowId rowId, RowUpdate update, CancellationToken cancellationToken = default)
-        {
-            EnsureActive();
-            if (coordinate && Definition.SystemVersioning is not null)
-            {
-                TableUpdateResult? atomicResult = null;
-                await owner.ExecuteStatementAsync(async (statement, token) =>
-                {
-                    var table = await statement.OpenTableAsync(Definition.Id, token).ConfigureAwait(false);
-                    atomicResult = await table.UpdateAsync(rowId, update, token).ConfigureAwait(false);
-                }, cancellationToken).ConfigureAwait(false);
-                return atomicResult!;
-            }
-            using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            RejectHistoryMutation();
-            RejectGraphMutation();
-            var result = Definition.SystemVersioning is null
-                ? await storage.UpdateAsync(rowId, update, cancellationToken).ConfigureAwait(false)
-                : await UpdateTemporalAsync(rowId, update, cancellationToken).ConfigureAwait(false);
-            if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
-        }
-        public async ValueTask<TableDeleteResult> DeleteAsync(RowId rowId, CancellationToken cancellationToken = default)
-        {
-            EnsureActive();
-            if (coordinate && Definition.SystemVersioning is not null)
-            {
-                TableDeleteResult? atomicResult = null;
-                await owner.ExecuteStatementAsync(async (statement, token) =>
-                {
-                    var table = await statement.OpenTableAsync(Definition.Id, token).ConfigureAwait(false);
-                    atomicResult = await table.DeleteAsync(rowId, token).ConfigureAwait(false);
-                }, cancellationToken).ConfigureAwait(false);
-                return atomicResult!;
-            }
-            using var lease = await EnterAsync(cancellationToken).ConfigureAwait(false);
-            RejectHistoryMutation();
-            RejectGraphMutation();
-            var result = Definition.SystemVersioning is null
-                ? await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false)
-                : await DeleteTemporalAsync(rowId, cancellationToken).ConfigureAwait(false);
-            if (flushMutations) await owner.FlushAndPublishAsync(cancellationToken).ConfigureAwait(false); return result;
-        }
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_quarantined) throw new InvalidOperationException("Database access is quarantined pending transaction recovery.");
+    }
+    internal bool IsInStorageScope => _accessGate.Current is not null;
 
-        private async IAsyncEnumerable<StorageTemporalRow> TemporalRowsAsync(StorageTemporalQuery query,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            var temporal = Definition.SystemVersioning ?? throw new InvalidOperationException(
-                $"Table {Definition.QualifiedName} is not system-versioned.");
-            var history = await owner.OpenTableStorageAsync(temporal.HistoryTableId, cancellationToken)
-                .ConfigureAwait(false);
-            await foreach (var row in history.ScanAsync(cancellationToken).ConfigureAwait(false))
-                if (MatchesTemporal(row.Row, temporal, query))
-                    yield return new StorageTemporalRow(temporal.HistoryTableId, row.RowId, row.Row);
-            await foreach (var row in storage.ScanAsync(cancellationToken).ConfigureAwait(false))
-                if (MatchesTemporal(row.Row, temporal, query))
-                    yield return new StorageTemporalRow(Definition.Id, row.RowId, row.Row);
-        }
 
-        private async ValueTask<TableUpdateResult> UpdateTemporalAsync(RowId rowId, RowUpdate update,
-            CancellationToken cancellationToken)
-        {
-            ArgumentNullException.ThrowIfNull(update);
-            var old = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
-            if (!old.Found) return new TableUpdateResult(false, rowId, rowId);
-            var (history, archived, timestamp) = await ArchiveAsync(old.Row!, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                var result = await storage.UpdateSystemVersionedAsync(rowId, update, timestamp, cancellationToken)
-                    .ConfigureAwait(false);
-                if (!result.Updated) await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
-                throw;
-            }
-        }
 
-        private async ValueTask<TableDeleteResult> DeleteTemporalAsync(RowId rowId,
-            CancellationToken cancellationToken)
-        {
-            var old = await storage.TryGetAsync(rowId, cancellationToken).ConfigureAwait(false);
-            if (!old.Found) return new TableDeleteResult(false, []);
-            var (history, archived, _) = await ArchiveAsync(old.Row!, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                var result = await storage.DeleteAsync(rowId, cancellationToken).ConfigureAwait(false);
-                if (!result.Deleted) await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
-                return result;
-            }
-            catch
-            {
-                await history.DeleteAsync(archived, CancellationToken.None).ConfigureAwait(false);
-                throw;
-            }
-        }
-
-        private async ValueTask<(TableStorage History, RowId Archived, SqlValue Timestamp)> ArchiveAsync(Row oldRow,
-            CancellationToken cancellationToken)
-        {
-            var temporal = Definition.SystemVersioning!;
-            var history = await owner.OpenTableStorageAsync(temporal.HistoryTableId, cancellationToken)
-                .ConfigureAwait(false);
-            var endPosition = ColumnPosition(temporal.PeriodEndColumnId);
-            var startColumn = Definition.Columns[ColumnPosition(temporal.PeriodStartColumnId)];
-            var timestamp = SqlConversion.ConvertTo(startColumn.Type,
-                await owner.AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind.RowStart, cancellationToken)
-                    .ConfigureAwait(false));
-            var values = oldRow.Values.ToArray();
-            if (((DateTimeSqlValue)timestamp).Value <
-                ((DateTimeSqlValue)values[ColumnPosition(temporal.PeriodStartColumnId)]).Value)
-                throw new InvalidOperationException("The temporal clock moved before the current row's period start.");
-            values[endPosition] = timestamp;
-            var inserted = await history.InsertPreparedAsync(new Row(values), cancellationToken).ConfigureAwait(false);
-            if (!inserted.Inserted) throw new InvalidOperationException("A temporal history insert was unexpectedly ignored.");
-            return (history, inserted.RowId!.Value, timestamp);
-        }
-
-        private bool MatchesTemporal(Row row, CatalogSystemVersioning temporal, StorageTemporalQuery query)
-        {
-            var start = ((DateTimeSqlValue)row.Values[ColumnPosition(temporal.PeriodStartColumnId)]).Value;
-            var end = ((DateTimeSqlValue)row.Values[ColumnPosition(temporal.PeriodEndColumnId)]).Value;
-            return query switch
-            {
-                StorageTemporalAsOf asOf => start <= asOf.Instant && end > asOf.Instant,
-                StorageTemporalFromTo range => start < range.End && end > range.Start,
-                StorageTemporalBetweenAnd range => start <= range.End && end > range.Start,
-                StorageTemporalContainedIn range => start >= range.Start && end <= range.End,
-                StorageTemporalAll => true,
-                _ => throw new ArgumentOutOfRangeException(nameof(query), query, "Unknown temporal query type.")
-            };
-        }
-
-        private int ColumnPosition(ColumnId id) => Definition.Columns.Select((column, position) => (column, position))
-            .Single(item => item.column.Id == id).position;
-
-        private void RejectHistoryMutation()
-        {
-            if (owner.TryGetTemporalCurrent(Definition.Id, out var current))
-                throw new InvalidOperationException(
-                    $"Temporal history table {Definition.QualifiedName} is maintained by {current!.QualifiedName}.");
-        }
-
-        private void RejectGraphMutation()
-        {
-            if (Definition.Graph is not null)
-                throw new InvalidOperationException(
-                    $"Graph table {Definition.QualifiedName} must be mutated through its graph storage handle.");
-        }
-
-        private void EnsureActive()
-        {
-            if (!isActive()) throw new InvalidOperationException("The statement scope has completed.");
-        }
-        private async ValueTask<IDisposable> EnterAsync(CancellationToken cancellationToken)
-            => coordinate ? await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false) : NoOpLease.Instance;
-
-        private Row ApplyMasking(Row row, StorageReadOptions readOptions) => new(row.Values.Select((value, position) =>
-        {
-            var column = Definition.Columns[position];
-            return readOptions.CanUnmask(column.Id) ? value : SqlDataMasking.Apply(column, value);
-        }));
+    internal async ValueTask<IDisposable> EnterStatementGateAsync(CancellationToken cancellationToken, bool reentrant = false)
+    {
+        ThrowIfDisposed();
+        var lease = await _accessGate.EnterAsync(cancellationToken, reentrant).ConfigureAwait(false);
+        try { ThrowIfDisposed(); return lease; }
+        catch { lease.Dispose(); throw; }
     }
 
-    internal async ValueTask<IDisposable> EnterStatementGateAsync(CancellationToken cancellationToken)
-    {
-        await _statementGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        return new GateLease(_statementGate);
-    }
-
-    private sealed class GateLease(SemaphoreSlim gate) : IDisposable
-    {
-        private SemaphoreSlim? _gate = gate;
-        public void Dispose() => Interlocked.Exchange(ref _gate, null)?.Release();
-    }
-
-    private sealed class NoOpLease : IDisposable
-    {
-        public static NoOpLease Instance { get; } = new();
-        public void Dispose() { }
-    }
+    internal IDisposable ActivateGate(IDisposable lease) => ((StorageGateLease)lease).Activate();
 
     internal long HandleGeneration => Volatile.Read(ref _handleGeneration);
 
     internal IStorageTable CreateStatementTable(TableStorage storage, Func<bool> isActive) =>
         new StorageTable(storage, this, coordinate: false, flushMutations: false, isActive);
 
-    private sealed class StorageIndex(CatalogIndex definition, CatalogTable table, PersistentBPlusTree tree,
-        StorageEngine owner) : IStorageIndex
-    {
-        private readonly long _generation = Volatile.Read(ref owner._handleGeneration);
-        public CatalogIndex Definition => definition;
 
-        public async ValueTask<IReadOnlyList<RowId>> FindAsync(IReadOnlyList<SqlValue> values,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            return await tree.FindAsync(CatalogIndexKey.EncodeValues(values, table, definition), cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        public async ValueTask<IReadOnlyList<StorageIndexEntry>> FindEntriesAsync(IReadOnlyList<SqlValue> values,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            return (await tree.FindEntriesAsync(CatalogIndexKey.EncodeValues(values, table, definition), cancellationToken)
-                .ConfigureAwait(false)).Select(ToStorageEntry).ToArray();
-        }
-
-        public async IAsyncEnumerable<RowId> ScanAsync(IReadOnlyList<SqlValue> lowerBound,
-            IReadOnlyList<SqlValue> upperBound, bool includeLowerBound = true, bool includeUpperBound = true,
-            ScanDirection direction = ScanDirection.Ascending,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            var range = new IndexRange(CatalogIndexKey.EncodeValues(lowerBound, table, definition),
-                CatalogIndexKey.EncodeValues(upperBound, table, definition), includeLowerBound, includeUpperBound, direction);
-            await foreach (var entry in tree.ScanAsync(range, cancellationToken).ConfigureAwait(false))
-                yield return entry.RowId;
-        }
-
-        public async IAsyncEnumerable<RowId> ScanAsync(StorageIndexRange range,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(range);
-            if (definition.Method != CatalogIndexMethod.BTree)
-                throw new InvalidOperationException("Bounded scans require a B-tree index.");
-            var lower = EncodeBound(range.LowerBound, lower: true);
-            var upper = EncodeBound(range.UpperBound, lower: false);
-            if (lower.BeyondEnd) yield break;
-            var physical = new IndexRange(lower.Key, upper.Key, lower.Inclusive, upper.Inclusive, range.Direction);
-            await foreach (var entry in tree.ScanAsync(physical, cancellationToken).ConfigureAwait(false))
-                yield return entry.RowId;
-        }
-
-        public async IAsyncEnumerable<StorageIndexEntry> ScanEntriesAsync(StorageIndexRange range,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(range);
-            var lower = EncodeBound(range.LowerBound, lower: true);
-            var upper = EncodeBound(range.UpperBound, lower: false);
-            if (lower.BeyondEnd) yield break;
-            var physical = new IndexRange(lower.Key, upper.Key, lower.Inclusive, upper.Inclusive, range.Direction);
-            await foreach (var entry in tree.ScanAsync(physical, cancellationToken).ConfigureAwait(false))
-                yield return ToStorageEntry(entry);
-        }
-
-        private StorageIndexEntry ToStorageEntry(LeafIndexEntry entry) => new(entry.RowId,
-            CatalogIndexKey.DecodeIncludedValues(entry.IncludedPayload.Span, table, definition));
-
-        private (IndexKey? Key, bool Inclusive, bool BeyondEnd) EncodeBound(StorageIndexBound? bound, bool lower)
-        {
-            if (bound is null) return (null, true, false);
-            ArgumentNullException.ThrowIfNull(bound.Values);
-            if (bound.Values.Count == 0 || bound.Values.Count > definition.Columns.Count)
-                throw new ArgumentException($"A bound must contain between 1 and {definition.Columns.Count} values.",
-                    lower ? nameof(StorageIndexRange.LowerBound) : nameof(StorageIndexRange.UpperBound));
-            var key = CatalogIndexKey.EncodePrefix(bound.Values, table, definition);
-            if (bound.Values.Count == definition.Columns.Count) return (key, bound.Inclusive, false);
-
-            // Every complete key sharing a composite prefix sorts in [prefix, successor(prefix)).
-            if (lower && bound.Inclusive || !lower && !bound.Inclusive) return (key, false, false);
-            var successor = PrefixSuccessor(key);
-            return successor is null ? (null, false, lower) : (successor, false, false);
-        }
-
-        private static IndexKey? PrefixSuccessor(IndexKey prefix)
-        {
-            var bytes = prefix.Bytes.ToArray();
-            for (var index = bytes.Length - 1; index >= 0; index--)
-            {
-                if (bytes[index] == byte.MaxValue) continue;
-                bytes[index]++;
-                return new IndexKey(bytes.AsSpan(0, index + 1));
-            }
-            return null;
-        }
-
-        public async ValueTask<IReadOnlyList<SpecializedIndexMatch>> SearchNearestAsync(SqlValue query, int count,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(query);
-            if (count <= 0) throw new ArgumentOutOfRangeException(nameof(count));
-            if (definition.Method is not (CatalogIndexMethod.Spatial or CatalogIndexMethod.Vector))
-                throw new InvalidOperationException("Nearest-neighbor search requires a spatial or vector index.");
-            var columnId = definition.Columns.Single().ColumnId;
-            var sourceColumn = table.Columns.Select((column, position) => (column, position))
-                .Single(item => item.column.Id == columnId);
-            if (query.IsNull) throw new ArgumentException("Nearest-neighbor query values cannot be NULL.", nameof(query));
-            sourceColumn.column.Type.Validate(query, "query");
-            if (definition.Method == CatalogIndexMethod.Spatial &&
-                definition.SpecializedOptions!.SpatialSrid is { } requiredSrid &&
-                ((SpatialSqlValue)query).Value.Srid != requiredSrid)
-                throw new ArgumentException($"Spatial index '{definition.Name}' requires SRID {requiredSrid}.", nameof(query));
-            if (definition.Method == CatalogIndexMethod.Vector &&
-                query is VectorSqlValue queryVector &&
-                !double.IsFinite(queryVector.DistanceTo(
-                    queryVector,
-                    definition.SpecializedOptions!.VectorMetric!.Value)))
-            {
-                throw new ArgumentException(
-                    $"Vector index '{definition.Name}' cannot search with a zero vector for cosine distance.",
-                    nameof(query));
-            }
-            var columnPosition = sourceColumn.position;
-            var storage = await owner.OpenTableStorageAsync(table.Id, cancellationToken).ConfigureAwait(false);
-            List<SpecializedIndexMatch> matches = [];
-            var range = new IndexRange(new IndexKey([0]), new IndexKey([2]));
-            await foreach (var entry in tree.ScanAsync(range, cancellationToken).ConfigureAwait(false))
-            {
-                var stored = await storage.TryGetAsync(entry.RowId, cancellationToken).ConfigureAwait(false);
-                if (!stored.Found || stored.Row!.Values[columnPosition].IsNull) continue;
-                var distance = (definition.Method, query, stored.Row.Values[columnPosition]) switch
-                {
-                    (CatalogIndexMethod.Spatial, SpatialSqlValue requested, SpatialSqlValue candidate) =>
-                        requested.Value.STDistance(candidate.Value) ?? double.NaN,
-                    (CatalogIndexMethod.Vector, VectorSqlValue requested, VectorSqlValue candidate) =>
-                        requested.DistanceTo(candidate, definition.SpecializedOptions!.VectorMetric!.Value),
-                    _ => throw new ArgumentException("Query value does not match the specialized index type.", nameof(query))
-                };
-                if (!double.IsFinite(distance))
-                {
-                    if (definition.Method == CatalogIndexMethod.Vector)
-                        throw new NonFiniteVectorDistanceException(definition.Name, entry.RowId);
-                    continue;
-                }
-                matches.Add(new SpecializedIndexMatch(entry.RowId, distance));
-            }
-            return matches.OrderBy(match => match.Distance).ThenBy(match => match.RowId.PageId.Value)
-                .ThenBy(match => match.RowId.SlotId.Value).Take(count).ToArray();
-        }
-
-        public async ValueTask<IReadOnlyList<RowId>> FindJsonPathAsync(string path, SqlValue value,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            HashSet<RowId> rows = [];
-            foreach (var key in CatalogIndexKey.EncodeJsonPathValueKeys(definition, path, value))
-                rows.UnionWith(await tree.FindAsync(key, cancellationToken).ConfigureAwait(false));
-            return rows.OrderBy(row => row.PageId.Value).ThenBy(row => row.SlotId.Value)
-                .ThenBy(row => row.Generation).ToArray();
-        }
-
-        public async ValueTask<IReadOnlyList<RowId>> FindJsonPathExistsAsync(string path,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            HashSet<RowId> rows = [];
-            foreach (var key in CatalogIndexKey.EncodeJsonPathExistsKeys(definition, path))
-                rows.UnionWith(await tree.FindAsync(key, cancellationToken).ConfigureAwait(false));
-            return rows.OrderBy(row => row.PageId.Value).ThenBy(row => row.SlotId.Value)
-                .ThenBy(row => row.Generation).ToArray();
-        }
-
-        public async ValueTask<IReadOnlyList<RowId>> FindXmlPathAsync(string path, string? value = null,
-            CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent(); using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            return await tree.FindAsync(value is null
-                ? CatalogIndexKey.EncodeXmlPathExists(definition, path)
-                : CatalogIndexKey.EncodeXmlPathValue(definition, path, value), cancellationToken).ConfigureAwait(false);
-        }
-
-        public async IAsyncEnumerable<FullTextIndexMatch> SearchFullTextAsync(FullTextSearchRequest request,
-            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            EnsureCurrent();
-            ArgumentNullException.ThrowIfNull(request);
-            if (definition.Method != CatalogIndexMethod.FullText)
-                throw new InvalidOperationException("Full-text search requires a full-text index.");
-            var key = CatalogIndexKey.EncodeFullTextTerm(definition, table, request);
-            using var lease = await owner.EnterStatementGateAsync(cancellationToken).ConfigureAwait(false);
-            var range = new IndexRange(key, key, true, true);
-            await foreach (var entry in tree.ScanAsync(range, cancellationToken).ConfigureAwait(false))
-                yield return new FullTextIndexMatch(entry.RowId);
-        }
-
-        private void EnsureCurrent()
-        {
-            if (_generation != Volatile.Read(ref owner._handleGeneration))
-                throw new InvalidOperationException("The storage handle is stale after statement rollback; reopen it from the catalog.");
-        }
-    }
 
     internal async ValueTask FlushAndPublishAsync(CancellationToken cancellationToken)
     {

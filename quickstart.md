@@ -348,3 +348,12 @@ unsupported shapes before opening a statement. No generic catalog escape hatch o
 
 IStorageStatement gains two methods; external implementations must implement them when rebuilding. Existing readers
 and catalog format 10 remain compatible. See [graph DDL review](docs/graph-ddl-review.md) for qualification evidence.
+
+## Explicit transaction lifetime
+
+Version 1.13.0 adds `BeginTransactionAsync(new StorageTransactionOptions(timeout))`. Use the returned
+`IStorageTransaction` for multiple awaited statement callbacks, then inspect its commit/rollback receipt.
+Reads and writes enlist through each callback's `IStorageTransactionContext`. See
+[the supported profile and recovery contract](https://github.com/callummarshall9/sql-storage-engine/blob/master/docs/explicit-transactions.md) before enabling this API.
+This API currently supports Linux and Serializable isolation, with a required timeout and a 256 MiB maximum
+whole-database journal quota. SQL BEGIN/COMMIT/ROLLBACK admission is a separate execution-engine feature.

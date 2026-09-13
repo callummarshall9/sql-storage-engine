@@ -92,6 +92,8 @@ public sealed class FilePageStore : IPageStore
         return ValueTask.CompletedTask;
     }
 
+    internal void RestoreLength(long length) => RandomAccess.SetLength(_handle, length);
+
     public ValueTask DisposeAsync()
     {
         if (!_disposed) { _disposed = true; _handle.Dispose(); }

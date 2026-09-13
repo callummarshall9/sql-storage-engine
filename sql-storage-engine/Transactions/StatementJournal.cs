@@ -22,9 +22,9 @@ internal sealed class StatementJournal : IAsyncDisposable
     public static string GetPath(string databasePath) => databasePath + ".statement-undo";
 
     public static async ValueTask<StatementJournal> CreateAsync(string databasePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? explicitPath = null)
     {
-        var journalPath = GetPath(databasePath);
+        var journalPath = explicitPath ?? GetPath(databasePath);
         if (File.Exists(journalPath))
             throw new StorageResourceException("A statement undo journal already exists.", new IOException());
         var temporaryPath = journalPath + $".{Guid.NewGuid():N}.tmp";
@@ -52,6 +52,7 @@ internal sealed class StatementJournal : IAsyncDisposable
             await destination.WriteAsync(header, cancellationToken).ConfigureAwait(false);
             destination.Flush(flushToDisk: true);
             File.Move(temporaryPath, journalPath, overwrite: false);
+            TransactionDirectory.Flush(journalPath);
             return new StatementJournal(journalPath);
         }
         catch
@@ -61,18 +62,18 @@ internal sealed class StatementJournal : IAsyncDisposable
         }
     }
 
-    public async ValueTask MarkCommittedAsync(CancellationToken cancellationToken)
+    public async ValueTask MarkCommittedAsync(CancellationToken cancellationToken, bool retain = false)
     {
         await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Write, FileShare.None,
             1, FileOptions.Asynchronous | FileOptions.RandomAccess);
         stream.Position = StateOffset;
         await stream.WriteAsync(new byte[] { Committed }, cancellationToken).ConfigureAwait(false);
         stream.Flush(flushToDisk: true);
-        _completed = true;
-        File.Delete(_path);
+        _completed = !retain;
+        if (!retain) TransactionDirectory.Delete(_path);
     }
 
-    public async ValueTask RestoreAsync(PageDatabase database, CancellationToken cancellationToken)
+    public async ValueTask RestoreAsync(PageDatabase database, CancellationToken cancellationToken, bool retain = false)
     {
         var snapshot = await ReadSnapshotAsync(_path, cancellationToken).ConfigureAwait(false);
         if (snapshot.State != Active) throw new StorageFormatException("Only an active statement journal can be restored.");
@@ -81,16 +82,17 @@ internal sealed class StatementJournal : IAsyncDisposable
         for (var offset = 0; offset < snapshot.Bytes.Length; offset += database.PageSize)
             await database.WriteAsync(new PageId(checked((ulong)(offset / database.PageSize))),
                 snapshot.Bytes.AsMemory(offset, database.PageSize), cancellationToken).ConfigureAwait(false);
+        database.RestoreLength(snapshot.Bytes.LongLength);
         await database.FlushAsync(cancellationToken).ConfigureAwait(false);
         await database.ReloadHeaderAsync(cancellationToken).ConfigureAwait(false);
-        _completed = true;
-        File.Delete(_path);
+        _completed = !retain;
+        if (!retain) TransactionDirectory.Delete(_path);
     }
 
     public static async ValueTask RecoverIfNeededAsync(string databasePath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? explicitPath = null, bool retain = false)
     {
-        var path = GetPath(databasePath);
+        var path = explicitPath ?? GetPath(databasePath);
         if (!File.Exists(path)) return;
         var snapshot = await ReadSnapshotAsync(path, cancellationToken).ConfigureAwait(false);
         if (snapshot.State == Active)
@@ -102,16 +104,31 @@ internal sealed class StatementJournal : IAsyncDisposable
                 await using (var stream = new FileStream(temporaryPath, FileMode.Open, FileAccess.ReadWrite,
                     FileShare.None, 1, FileOptions.WriteThrough)) stream.Flush(flushToDisk: true);
                 File.Move(temporaryPath, databasePath, overwrite: true);
+                TransactionDirectory.Flush(databasePath);
             }
             finally { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); }
         }
-        File.Delete(path);
+        if (!retain) TransactionDirectory.Delete(path);
     }
+
+    internal static async ValueTask<DatabaseId> ReadDatabaseIdentityAsync(string path, CancellationToken token)
+    {
+        var snapshot = await ReadSnapshotAsync(path, token).ConfigureAwait(false);
+        var size = BinaryPrimitives.ReadInt32LittleEndian(snapshot.Bytes.AsSpan(DatabaseHeaderCodec.PayloadOffset + 28));
+        if (!PageConstants.IsSupportedSize(size) || snapshot.Bytes.Length < size)
+            throw new StorageFormatException("Transaction snapshot header is invalid.");
+        return DatabaseHeaderCodec.Read(snapshot.Bytes.AsSpan(0, size)).DatabaseId;
+    }
+
+    internal static async ValueTask<bool> IsCommittedAsync(string path, CancellationToken token) =>
+        (await ReadSnapshotAsync(path, token).ConfigureAwait(false)).State == Committed;
+
+    internal void Delete() { TransactionDirectory.Delete(_path); _completed = true; }
 
     public ValueTask DisposeAsync()
     {
         // An incomplete journal is intentionally retained for recovery.
-        if (_completed && File.Exists(_path)) File.Delete(_path);
+        if (_completed && File.Exists(_path)) TransactionDirectory.Delete(_path);
         return ValueTask.CompletedTask;
     }
 

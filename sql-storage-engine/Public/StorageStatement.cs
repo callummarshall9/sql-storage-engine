@@ -3,8 +3,14 @@ using sql_storage_engine.Identifiers;
 
 namespace sql_storage_engine;
 
-internal sealed class StorageStatement(StorageEngine owner) : IStorageStatement
+internal sealed class StorageStatement(StorageEngine owner) : IStorageTransactionContext
 {
+    public IStorageCatalog Catalog => new StorageScopedCatalog(owner, () => _active);
+    public ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId, CancellationToken cancellationToken = default)
+    {
+        if (!_active) throw new InvalidOperationException("The statement scope has completed.");
+        return owner.OpenScopedIndexAsync(indexId, () => _active, cancellationToken);
+    }
     private volatile bool _active = true;
     private bool _ddlFailed;
     internal void ThrowIfDdlFailed()
