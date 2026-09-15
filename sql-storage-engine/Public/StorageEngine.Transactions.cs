@@ -41,7 +41,7 @@ public sealed partial class StorageEngine
             await StorageTransactionFiles.WriteAsync(StorageTransactionFiles.ActivePath(TransactionPath), identity, cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             _database.MaximumAllocatedBytes = options.MaximumJournalBytes;
-            var transaction = new StorageTransaction(this, lease, journal, identity);
+            var transaction = new StorageTransaction(this, lease, journal, identity, options.MaximumJournalBytes);
             _activeTransaction = transaction;
             transaction.StartDeadline(options.Timeout);
             return transaction;

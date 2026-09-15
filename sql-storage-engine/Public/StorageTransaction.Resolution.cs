@@ -64,6 +64,7 @@ internal sealed partial class StorageTransaction
     {
         await StorageTransactionFiles.WriteReceiptAsync(_owner.TransactionPath, new(Identity, state), CancellationToken.None).ConfigureAwait(false);
         _owner.TransactionObserver?.Invoke("AfterReceipt");
+        StorageSavepointFiles.DeleteAll(_owner.TransactionPath);
         _journal.Delete();
         TransactionDirectory.Delete(StorageTransactionFiles.ActivePath(_owner.TransactionPath));
         State = state;

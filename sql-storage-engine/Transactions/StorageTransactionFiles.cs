@@ -48,6 +48,7 @@ internal static class StorageTransactionFiles
         {
             // A begin can fail before publishing its identity, but cannot run a callback before publication.
             if (File.Exists(journal)) await StatementJournal.RecoverIfNeededAsync(path, token, journal).ConfigureAwait(false);
+            StorageSavepointFiles.DeleteAll(path);
             return;
         }
         StorageTransactionIdentity identity;
@@ -72,6 +73,7 @@ internal static class StorageTransactionFiles
         }
         else if (receipt.State == StorageTransactionState.Indeterminate)
             throw new InvalidDataException("An unresolved transaction has no recovery evidence.");
+        StorageSavepointFiles.DeleteAll(path);
         TransactionDirectory.Delete(active);
     }
 }

@@ -9,6 +9,9 @@ public sealed class ExplicitTransactionCrashTests
     [TestCase("active")]
     [TestCase("nested")]
     [TestCase("committed")]
+    [TestCase("savepoint-active")]
+    [TestCase("savepoint-rewrite")]
+    [TestCase("savepoint-committed")]
     public async Task AbruptProcessExitRecoversEntireRootAndCatalog(string phase)
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
@@ -24,10 +27,12 @@ public sealed class ExplicitTransactionCrashTests
         child.ExitCode.Should().Be(42, await child.StandardError.ReadToEndAsync());
         var identity = JsonSerializer.Deserialize<StorageTransactionIdentity>(await File.ReadAllTextAsync(database.Path + ".probe-identity"));
         await database.ReopenAsync();
-        var expected = phase == "committed" ? StorageTransactionState.Committed : StorageTransactionState.Aborted;
+        var expected = phase is "committed" or "savepoint-committed" ? StorageTransactionState.Committed : StorageTransactionState.Aborted;
         (await database.Engine.ResolveTransactionAsync(identity)).State.Should().Be(expected);
-        database.Engine.Catalog.Tables.Any(table => table.Name == "crash_created").Should().Be(phase == "committed");
+        database.Engine.Catalog.Tables.Any(table => table.Name == "crash_created").Should().Be(phase is "committed" or "savepoint-committed");
         (await database.BalancesAsync()).Should().Equal(100, 100);
+        Directory.GetFiles(Path.GetDirectoryName(database.Path)!, "*.savepoint-*").Should().BeEmpty();
+        database.Engine.Catalog.Tables.Any(table => table.Name == "savepoint_later").Should().BeFalse();
         File.Exists(database.Path + ".statement-undo").Should().BeFalse();
         File.Exists(database.Path + ".transaction-undo").Should().BeFalse();
     }

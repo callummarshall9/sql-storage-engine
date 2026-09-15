@@ -17,6 +17,17 @@ internal static class Program
                 [new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false)], cancellationToken: token);
             await (await context.OpenTableAsync(definition.Id, token)).InsertAsync(new Row([SqlValue.Integer(42)]), token);
         });
+        if (args[1].StartsWith("savepoint", StringComparison.Ordinal))
+        {
+            var point = await transaction.CreateSavepointAsync("before");
+            await transaction.ExecuteStatementAsync(async (context, token) =>
+                await context.CreateTableAsync(new CatalogTableName("master", "dbo", "savepoint_later"),
+                    [new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false)], cancellationToken: token));
+            if (args[1] == "savepoint-rewrite") engine.TransactionObserver = stage => { if (stage == "AfterSavepointRestore") Environment.Exit(42); };
+            if (args[1] != "savepoint-active") await transaction.RollbackToSavepointAsync(point);
+            if (args[1] == "savepoint-committed") await transaction.CommitAsync();
+            Environment.Exit(42);
+        }
         if (args[1] == "committed") await transaction.CommitAsync();
         else if (args[1] == "nested")
             await transaction.ExecuteStatementAsync((_, _) => { Environment.Exit(42); return ValueTask.CompletedTask; });

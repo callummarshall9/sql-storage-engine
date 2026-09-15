@@ -7,6 +7,7 @@ internal sealed partial class StorageTransaction : IStorageTransaction
     private readonly StorageEngine _owner;
     private readonly StorageGateLease _lease;
     private readonly StatementJournal _journal;
+    private readonly StorageSavepointStore _savepoints;
     private readonly CancellationTokenSource _deadline;
     private readonly SemaphoreSlim _operation = new(1, 1);
     private readonly CancellationTokenRegistration _expiry;
@@ -17,9 +18,10 @@ internal sealed partial class StorageTransaction : IStorageTransaction
     public StorageTransactionState State { get; private set; } = StorageTransactionState.Committable;
 
     internal StorageTransaction(StorageEngine owner, StorageGateLease lease, StatementJournal journal,
-        StorageTransactionIdentity identity)
+        StorageTransactionIdentity identity, long maximumSavepointBytes)
     {
         _owner = owner; _lease = lease; _journal = journal; Identity = identity;
+        _savepoints = new StorageSavepointStore(owner, identity, maximumSavepointBytes);
         _deadline = new CancellationTokenSource();
         _expiry = _deadline.Token.UnsafeRegister(_ => _timeoutCleanup = ExpireAsync(), null);
     }
