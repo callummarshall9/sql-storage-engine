@@ -10,7 +10,7 @@ using sql_storage_engine.Overflow;
 namespace sql_storage_engine.Catalog;
 
 /// <summary>Coordinates validated table metadata with heap allocation and bootstrap catalog publication.</summary>
-public sealed class CatalogService
+public sealed partial class CatalogService
 {
     private readonly IPageAllocator _allocator;
     private readonly BufferPool _bufferPool;
@@ -93,7 +93,7 @@ public sealed class CatalogService
             _definition.ScalarTypes, _definition.TableTypes, _definition.XmlSchemaCollections, _definition.Assemblies);
         try
         {
-            var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            var written = await WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
             await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
             _definition = candidate;
             RootPageId = written.RootPageId;
@@ -147,7 +147,7 @@ public sealed class CatalogService
             var candidate = new CatalogDefinition(_definition.Tables.Append(current).Append(history),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
-            var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            var written = await WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
             await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
             _definition = candidate;
             RootPageId = written.RootPageId;
@@ -179,11 +179,12 @@ public sealed class CatalogService
             var next = current + identityColumn.Identity!.Increment;
             var replacement = new CatalogTable(table.Id, table.Name, table.SchemaVersion, table.FirstHeapPageId,
                 table.Columns, table.CheckConstraints, next, table.DatabaseName, table.SchemaName,
-                table.SystemVersioning, table.Graph);
+                table.SystemVersioning, table.Graph)
+            { ObjectId = table.ObjectId };
             var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
-            var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            var written = await WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
             await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
             _definition = candidate; RootPageId = written.RootPageId;
             return allocated;
@@ -236,7 +237,8 @@ public sealed class CatalogService
                 throw new CatalogConflictException($"Table {table.QualifiedName} is already registered for graph storage.");
             var replacement = new CatalogTable(table.Id, table.Name, checked(table.SchemaVersion + 1),
                 table.FirstHeapPageId, table.Columns, table.CheckConstraints, table.NextIdentityValue,
-                table.DatabaseName, table.SchemaName, table.SystemVersioning, graph);
+                table.DatabaseName, table.SchemaName, table.SystemVersioning, graph)
+            { ObjectId = table.ObjectId };
             var candidate = new CatalogDefinition(_definition.Tables.Select(item => item.Id == tableId ? replacement : item),
                 _definition.Indexes, _definition.ScalarTypes, _definition.TableTypes,
                 _definition.XmlSchemaCollections, _definition.Assemblies);
@@ -323,7 +325,7 @@ public sealed class CatalogService
                 btreeOptions.StorageKind, btreeOptions.IsPrimaryKey, btreeOptions.IncludedColumns, btreeOptions.IgnoreDuplicateKey);
             var candidate = new CatalogDefinition(_definition.Tables, _definition.Indexes.Append(published),
                 _definition.ScalarTypes, _definition.TableTypes, _definition.XmlSchemaCollections, _definition.Assemblies);
-            var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            var written = await WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
             await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
             _definition = candidate;
             RootPageId = written.RootPageId;
@@ -504,7 +506,7 @@ public sealed class CatalogService
                 owner._definition.XmlSchemaCollections, owner._definition.Assemblies);
             // The new tree root must be durable before metadata is allowed to point at it.
             await owner._bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
-            var written = await owner._pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            var written = await owner.WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
             await owner._bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
             owner._definition = candidate;
             owner.RootPageId = written.RootPageId;
@@ -524,7 +526,7 @@ public sealed class CatalogService
     private async ValueTask PublishDefinitionAsync(CatalogDefinition candidate,
         CancellationToken cancellationToken)
     {
-        var written = await _pageChain.WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+        var written = await WriteDefinitionAsync(candidate, cancellationToken).ConfigureAwait(false);
         await _bufferPool.FlushAllAsync(cancellationToken).ConfigureAwait(false);
         _definition = candidate;
         RootPageId = written.RootPageId;
@@ -543,7 +545,8 @@ public sealed class CatalogService
         }
         var tables = _definition.Tables.Select(table => new CatalogTable(table.Id, table.Name, table.SchemaVersion,
             table.FirstHeapPageId, table.Columns.Select(RebindColumn), table.CheckConstraints, table.NextIdentityValue,
-            table.DatabaseName, table.SchemaName, table.SystemVersioning, table.Graph));
+            table.DatabaseName, table.SchemaName, table.SystemVersioning, table.Graph)
+        { ObjectId = table.ObjectId });
         var tableTypes = _definition.TableTypes.Select(type => new CatalogTableType(type.SchemaName, type.Name,
             type.Columns.Select(RebindColumn), type.Indexes, type.CheckConstraints, type.IsMemoryOptimized));
         return new CatalogDefinition(tables, _definition.Indexes, _definition.ScalarTypes, tableTypes,

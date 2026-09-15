@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 10;
-    public const uint Magic = 0x30544143; // "CAT0": the single-byte suffix represents catalog format 10.
+    public const ushort FormatVersion = 11;
+    public const uint Magic = 0x31544143; // CAT1: catalog format 11.
+    private const uint Version10Magic = 0x30544143;
     private const uint Version9Magic = 0x39544143;
     private const uint Version8Magic = 0x38544143;
     private const uint Version7Magic = 0x37544143;
@@ -62,6 +63,7 @@ public static class CatalogCodec
         foreach (var table in catalog.Tables)
         {
             WriteUInt64(output, table.Id.Value);
+            WriteBytes(output, table.ObjectId.ToByteArray());
             WriteString(output, table.DatabaseName);
             WriteString(output, table.SchemaName);
             WriteString(output, table.Name);
@@ -165,20 +167,28 @@ public static class CatalogCodec
             WriteUInt32(output, checked((uint)tableType.CheckConstraints.Count));
             foreach (var check in tableType.CheckConstraints) { WriteString(output, check.Name); WriteString(output, check.Expression); }
         }
+        WriteBytes(output, Security.StorageSecurityState.Encode(catalog.Security));
         return output.WrittenSpan.ToArray();
+    }
+
+    private static Guid ReadObjectId(byte[] bytes)
+    {
+        if (bytes.Length != 16 || new Guid(bytes) == Guid.Empty)
+            throw new StorageFormatException("Invalid security object identity.");
+        return new Guid(bytes);
     }
 
     public static CatalogDefinition Decode(ReadOnlySpan<byte> source)
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
+        if (magic is not (Magic or Version10Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
             throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or 7 or 8 or 9 or FormatVersion) || version == 6 && magic != Version6Magic ||
+        if (version is not (6 or 7 or 8 or 9 or 10 or FormatVersion) || version == 6 && magic != Version6Magic ||
             version == 7 && magic != Version7Magic || version == 8 && magic != Version8Magic ||
             version == 9 && magic != Version9Magic ||
-            version == FormatVersion && magic != Magic)
+            version == 10 && magic != Version10Magic || version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();
@@ -214,6 +224,7 @@ public static class CatalogCodec
         for (var tableNumber = 0; tableNumber < tableCount; tableNumber++)
         {
             var id = new TableId(reader.UInt64());
+            var objectId = version >= 11 ? ReadObjectId(reader.Bytes()) : Guid.NewGuid();
             var databaseName = version >= 7 ? reader.String() : "default";
             var schemaName = version >= 7 ? reader.String() : "dbo";
             var name = reader.String();
@@ -266,7 +277,8 @@ public static class CatalogCodec
             try
             {
                 tables.Add(new CatalogTable(id, name, schemaVersion, heapRoot, columns, checks, nextIdentity,
-                databaseName, schemaName, systemVersioning, graph));
+                databaseName, schemaName, systemVersioning, graph)
+                { ObjectId = objectId });
             }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid catalog table record.", exception); }
         }
@@ -392,8 +404,9 @@ public static class CatalogCodec
             try { tableTypes.Add(new CatalogTableType(schemaName, name, columns, typeIndexes, checks, memoryOptimized)); }
             catch (ArgumentException exception) { throw new StorageFormatException("Invalid table-type record.", exception); }
         }
+        var security = version >= 11 ? Security.StorageSecurityState.Decode(reader.Bytes()) : new Security.StorageSecurityState();
         if (!reader.End) throw new StorageFormatException("Bootstrap catalog contains trailing bytes.");
-        try { return new CatalogDefinition(tables, indexes, scalarTypes, tableTypes, xmlSchemas, assemblies); }
+        try { return new CatalogDefinition(tables, indexes, scalarTypes, tableTypes, xmlSchemas, assemblies) { Security = security }; }
         catch (ArgumentException exception) { throw new StorageCorruptionException("Bootstrap catalog cross-references are invalid.", exception); }
     }
 

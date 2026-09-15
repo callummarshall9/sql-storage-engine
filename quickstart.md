@@ -357,3 +357,8 @@ Reads and writes enlist through each callback's `IStorageTransactionContext`. Se
 [the supported profile and recovery contract](https://github.com/callummarshall9/sql-storage-engine/blob/master/docs/explicit-transactions.md) before enabling this API.
 This API currently supports Linux and Serializable isolation, with a required timeout and a 256 MiB maximum
 whole-database journal quota. SQL BEGIN/COMMIT/ROLLBACK admission is a separate execution-engine feature.
+
+## Versioned permissions and audit
+
+Version 1.15.0 adds host-trusted transaction-scoped permission administration, stable object bindings and durable audit
+primitives. Read [the security profile](docs/security.md) for admission, revision, rollback, audit quota and recovery rules.

@@ -655,6 +655,7 @@ public sealed partial class StorageEngine : IStorageEngine, IStorageCatalog
             throw new InvalidOperationException("Transaction cleanup is still running; retry disposal after the callback stops.");
         using var lease = await _accessGate.EnterAsync(CancellationToken.None, reentrant: false).ConfigureAwait(false);
         if (_disposed) return;
+        await _securityEventsGate.WaitAsync().ConfigureAwait(false);
         _disposed = true;
         try
         {
@@ -662,7 +663,7 @@ public sealed partial class StorageEngine : IStorageEngine, IStorageCatalog
             await _bufferPool.DisposeAsync().ConfigureAwait(false);
             await _database.DisposeAsync().ConfigureAwait(false);
         }
-        finally { _fileLease?.Dispose(); }
+        finally { _fileLease?.Dispose(); _securityEventsGate.Release(); }
     }
 
     private async ValueTask PublishCatalogAsync(CancellationToken cancellationToken)

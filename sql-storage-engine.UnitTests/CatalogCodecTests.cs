@@ -12,9 +12,21 @@ public sealed class CatalogCodecTests
 {
     private static CatalogDefinition Sample() => new(
         [new CatalogTable(new TableId(1), "t", 2, new PageId(3),
-            [new CatalogColumn(new ColumnId(4), "c", SqlType.VarChar(100, "Latin1_General_100_BIN2"), true)])],
+            [new CatalogColumn(new ColumnId(4), "c", SqlType.VarChar(100, "Latin1_General_100_BIN2"), true)]) { ObjectId = new Guid("11111111-2222-3333-4444-555555555555") }],
         [new CatalogIndex(new IndexId(5), "i", new TableId(1), new PageId(6), true,
             [new CatalogIndexedColumn(new ColumnId(4), SortDirection.Descending, NullSortOrder.First, "o")])]);
+
+    // Retain the committed v10 golden oracle and legacy migration fixtures.
+    private static byte[] Version10(CatalogDefinition catalog)
+    {
+        var bytes = CatalogCodec.Encode(catalog);
+        var tail = sql_storage_engine.Security.StorageSecurityState.Encode(catalog.Security).Length + 4;
+        // These fixtures contain one table and no records preceding it.
+        var legacy = bytes[..40].Concat(bytes[60..^tail]).ToArray();
+        BinaryPrimitives.WriteUInt32LittleEndian(legacy, 0x30544143);
+        BinaryPrimitives.WriteUInt16LittleEndian(legacy.AsSpan(4), 10);
+        return legacy;
+    }
 
     [Test]
     public void TableAndIndexDefinitions_RoundTripThroughBootstrapFormat()
@@ -27,14 +39,14 @@ public sealed class CatalogCodecTests
     [Test]
     public void SampleCatalog_ProducesCommittedGoldenBytes()
     {
-        Convert.ToBase64String(SHA256.HashData(CatalogCodec.Encode(Sample())))
+        Convert.ToBase64String(SHA256.HashData(Version10(Sample())))
             .Should().Be("uzNbagABC7gBatD2cQTus3jcSAG+AyXcMinXj37OKIY=");
     }
 
     [Test]
     public void Version7CatalogWithoutTemporalMetadataRemainsReadable()
     {
-        var version10 = CatalogCodec.Encode(Sample());
+        var version10 = Version10(Sample());
         const int indexRecordLength = 58;
         var graphMarkerOffset = version10.Length - indexRecordLength - 1;
         var version9 = version10[..graphMarkerOffset].Concat(version10[(graphMarkerOffset + 1)..]).ToArray();
@@ -64,8 +76,8 @@ public sealed class CatalogCodecTests
                 [new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First)],
                 CatalogSpecializedIndexOptions.Spatial())
         ]);
-        var version10 = CatalogCodec.Encode(catalog);
-        var tableOnlyLength = CatalogCodec.Encode(new CatalogDefinition([table], [])).Length;
+        var version10 = Version10(catalog);
+        var tableOnlyLength = Version10(new CatalogDefinition([table], [])).Length;
         var version9 = version10[..(tableOnlyLength - 1)].Concat(version10[tableOnlyLength..]).ToArray();
         var spatialSridMarkerOffset = version9.Length - 10;
         var version8 = version9[..spatialSridMarkerOffset]
@@ -132,7 +144,7 @@ public sealed class CatalogCodecTests
     {
         var encoded = CatalogCodec.Encode(Sample());
         // The sample has no records after its 58-byte index record. Its table ID starts 13 bytes into that record.
-        BinaryPrimitives.WriteUInt64LittleEndian(encoded.AsSpan(encoded.Length - 45), 99);
+        BinaryPrimitives.WriteUInt64LittleEndian(encoded.AsSpan(encoded.Length - sql_storage_engine.Security.StorageSecurityState.Encode(new()).Length - 4 - 45), 99);
         ((Func<CatalogDefinition>)(() => CatalogCodec.Decode(encoded))).Should().Throw<StorageCorruptionException>();
     }
 }

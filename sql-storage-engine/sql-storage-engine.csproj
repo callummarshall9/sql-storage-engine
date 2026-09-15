@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
@@ -6,7 +6,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <PackageId>SqlStorageEngine</PackageId>
-        <Version>1.14.0</Version>
+        <Version>1.15.0</Version>
         <Authors>Callum Marshall</Authors>
         <Description>A page-oriented SQL storage engine with buffering, heaps, indexes, graph identity, transactions, WAL, recovery, backup, and operational tooling.</Description>
         <PackageTags>sql;storage-engine;database;wal;b-plus-tree;graph</PackageTags>

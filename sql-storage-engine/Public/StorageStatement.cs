@@ -5,6 +5,7 @@ namespace sql_storage_engine;
 
 internal sealed class StorageStatement(StorageEngine owner) : IStorageTransactionContext
 {
+    public Security.IStorageSecurityContext Security => new Security.StorageSecurityContext(owner, this, () => _active, () => _ddlFailed = true);
     public IStorageCatalog Catalog => new StorageScopedCatalog(owner, () => _active);
     public ValueTask<IStorageIndex> OpenIndexAsync(IndexId indexId, CancellationToken cancellationToken = default)
     {
@@ -15,7 +16,7 @@ internal sealed class StorageStatement(StorageEngine owner) : IStorageTransactio
     private bool _ddlFailed;
     internal void ThrowIfDdlFailed()
     {
-        if (_ddlFailed) throw new InvalidOperationException("Graph DDL failed; the statement must roll back.");
+        if (_ddlFailed) throw new InvalidOperationException("A required statement operation failed; the statement must roll back.");
     }
     public ValueTask<CatalogTable> CreateGraphNodeTableAsync(CatalogTableName name,
         IEnumerable<CatalogColumn> payloadColumns, CancellationToken cancellationToken = default) =>

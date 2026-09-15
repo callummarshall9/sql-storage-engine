@@ -17,6 +17,18 @@ internal static class Program
                 [new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false)], cancellationToken: token);
             await (await context.OpenTableAsync(definition.Id, token)).InsertAsync(new Row([SqlValue.Integer(42)]), token);
         });
+        if (args[1].StartsWith("security", StringComparison.Ordinal))
+        {
+            await transaction.ExecuteStatementAsync((c, t) => c.Security.SetPrincipalAsync(new(
+                new(Guid.Parse("11111111-2222-3333-4444-555555555555"), Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")), true),
+                c.Security.Snapshot.Revision, Guid.NewGuid(), t));
+            if (args[1].StartsWith("security-event-", StringComparison.Ordinal))
+                engine.TransactionObserver = stage => { if (stage == args[1]) Environment.Exit(42); };
+            await engine.Security.AppendEventAsync(new(Guid.NewGuid(), Guid.NewGuid(), null, null,
+                sql_storage_engine.Security.StoragePermissionAction.Select, sql_storage_engine.Security.StorageAuditKind.ReadAdmission, 2));
+            if (args[1] == "security-committed") await transaction.CommitAsync();
+            Environment.Exit(42);
+        }
         if (args[1].StartsWith("savepoint", StringComparison.Ordinal))
         {
             var point = await transaction.CreateSavepointAsync("before");
