@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 11;
-    public const uint Magic = 0x31544143; // CAT1: catalog format 11.
+    public const ushort FormatVersion = 12;
+    public const uint Magic = 0x32544143; // CAT1: catalog format 12.
+    private const uint Version11Magic = 0x31544143;
     private const uint Version10Magic = 0x30544143;
     private const uint Version9Magic = 0x39544143;
     private const uint Version8Magic = 0x38544143;
@@ -182,13 +183,13 @@ public static class CatalogCodec
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version10Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
+        if (magic is not (Magic or Version11Magic or Version10Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
             throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or 7 or 8 or 9 or 10 or FormatVersion) || version == 6 && magic != Version6Magic ||
+        if (version is not (6 or 7 or 8 or 9 or 10 or 11 or FormatVersion) || version == 6 && magic != Version6Magic ||
             version == 7 && magic != Version7Magic || version == 8 && magic != Version8Magic ||
             version == 9 && magic != Version9Magic ||
-            version == 10 && magic != Version10Magic || version == FormatVersion && magic != Magic)
+            version == 10 && magic != Version10Magic || version == 11 && magic != Version11Magic || version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();

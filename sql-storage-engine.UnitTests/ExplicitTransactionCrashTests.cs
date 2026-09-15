@@ -8,6 +8,8 @@ public sealed class ExplicitTransactionCrashTests
 {
     [TestCase("security-event-before-publish")]
     [TestCase("security-event-after-publish")]
+    [TestCase("lifecycle-active")]
+    [TestCase("lifecycle-committed")]
     [TestCase("security-active")]
     [TestCase("security-committed")]
     [TestCase("active")]
@@ -31,12 +33,20 @@ public sealed class ExplicitTransactionCrashTests
         child.ExitCode.Should().Be(42, await child.StandardError.ReadToEndAsync());
         var identity = JsonSerializer.Deserialize<StorageTransactionIdentity>(await File.ReadAllTextAsync(database.Path + ".probe-identity"));
         await database.ReopenAsync();
-        var expected = phase is "committed" or "savepoint-committed" or "security-committed" ? StorageTransactionState.Committed : StorageTransactionState.Aborted;
+        var expected = phase is "committed" or "savepoint-committed" or "security-committed" or "lifecycle-committed" ? StorageTransactionState.Committed : StorageTransactionState.Aborted;
         (await database.Engine.ResolveTransactionAsync(identity)).State.Should().Be(expected);
-        database.Engine.Catalog.Tables.Any(table => table.Name == "crash_created").Should().Be(phase is "committed" or "savepoint-committed" or "security-committed");
+        database.Engine.Catalog.Tables.Any(table => table.Name == "crash_created").Should().Be(phase is "committed" or "savepoint-committed" or "security-committed" or "lifecycle-committed");
         (await database.BalancesAsync()).Should().Equal(100, 100);
         Directory.GetFiles(Path.GetDirectoryName(database.Path)!, "*.savepoint-*").Should().BeEmpty();
         database.Engine.Catalog.Tables.Any(table => table.Name == "savepoint_later").Should().BeFalse();
+        if (phase.StartsWith("lifecycle", StringComparison.Ordinal))
+        {
+            var snapshot = await database.Engine.Security.ReadAsync();
+            snapshot.RetiredPrincipals.Count.Should().Be(phase == "lifecycle-committed" ? 1 : 0);
+            snapshot.Principals.Count.Should().Be(phase == "lifecycle-committed" ? 1 : 0);
+            snapshot.MutationAudit.Count.Should().Be(phase == "lifecycle-committed" ? 4 : 0);
+            snapshot.MutationAudit.Count(a => a.PrincipalOperation == Security.StoragePrincipalOperation.Retire).Should().Be(phase == "lifecycle-committed" ? 1 : 0);
+        }
         if (phase.StartsWith("security", StringComparison.Ordinal))
         {
             (await database.Engine.Security.ReadAsync()).Principals.Count.Should().Be(phase == "security-committed" ? 1 : 0);

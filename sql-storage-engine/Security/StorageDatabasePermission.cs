@@ -1,0 +1,3 @@
+namespace sql_storage_engine.Security;
+
+public sealed record StorageDatabasePermission(StoragePrincipalId Principal, StorageDatabasePermissionAction Action, StoragePermissionEffect Effect);

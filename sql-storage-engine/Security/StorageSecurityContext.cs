@@ -2,7 +2,7 @@ using sql_storage_engine.Identifiers;
 
 namespace sql_storage_engine.Security;
 
-internal sealed class StorageSecurityContext(StorageEngine owner, IStorageTransactionContext context,
+internal sealed partial class StorageSecurityContext(StorageEngine owner, IStorageTransactionContext context,
     Func<bool> active, Action poison) : IStorageSecurityContext
 {
     private void Check()
@@ -30,6 +30,7 @@ internal sealed class StorageSecurityContext(StorageEngine owner, IStorageTransa
         {
             ArgumentNullException.ThrowIfNull(principal); StorageSecurityState.ValidatePrincipal(principal.Id);
             var state = Current(expectedRevision, operationId);
+            if (state.RetiredPrincipals.Contains(principal.Id)) throw new InvalidOperationException("Principal identity is retired.");
             var principals = state.Principals.Where(p => p.Id != principal.Id).Append(principal).ToArray();
             if (principals.Length > 1024) throw new InvalidOperationException("Principal quota exceeded.");
             var next = state with { Revision = state.Principals.Contains(principal) ? state.Revision : checked(state.Revision + 1), Principals = principals };
@@ -50,7 +51,7 @@ internal sealed class StorageSecurityContext(StorageEngine owner, IStorageTransa
             ArgumentNullException.ThrowIfNull(permission);
             StorageSecurityState.ValidatePrincipal(permission.Principal);
             var state = Current(expectedRevision, operationId);
-            if (!Enum.IsDefined(permission.Action) || !Enum.IsDefined(permission.Effect) ||
+            if (!Enum.IsDefined(permission.Action) || permission.Action == StoragePermissionAction.ManagePrincipals || !Enum.IsDefined(permission.Effect) ||
                 !state.Principals.Any(p => p.Id == permission.Principal && p.Active) ||
                 !owner.SecurityCatalog.Tables.Any(t => t.ObjectId == permission.ObjectId)) throw new ArgumentException("Invalid permission target.");
             var permissions = state.Permissions.Where(p => p != permission).Concat(remove ? [] : new[] { permission }).ToArray();
@@ -95,7 +96,7 @@ internal sealed class StorageSecurityContext(StorageEngine owner, IStorageTransa
             if (!state.Principals.Any(p => p.Id == request.Principal && p.Active)) throw new StorageAuthorizationException("Principal is not active.");
             foreach (var access in request.Access)
             {
-                if (access is null || access.Object is null || !Enum.IsDefined(access.Action)) throw new ArgumentException("Invalid required access.");
+                if (access is null || access.Object is null || !Enum.IsDefined(access.Action) || access.Action == StoragePermissionAction.ManagePrincipals) throw new ArgumentException("Invalid required access.");
                 if (access.Object.DatabaseId != owner.DatabaseId || !owner.SecurityCatalog.Tables.Any(t =>
                     t.ObjectId == access.Object.ObjectId && t.SchemaVersion == access.Object.SchemaVersion))
                     throw new StorageAuthorizationException("Object binding is stale or foreign.");

@@ -17,6 +17,20 @@ internal static class Program
                 [new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false)], cancellationToken: token);
             await (await context.OpenTableAsync(definition.Id, token)).InsertAsync(new Row([SqlValue.Integer(42)]), token);
         });
+        if (args[1].StartsWith("lifecycle", StringComparison.Ordinal))
+        {
+            var actor = new sql_storage_engine.Security.StoragePrincipalId(Guid.NewGuid(), Guid.NewGuid());
+            var target = new sql_storage_engine.Security.StoragePrincipalId(Guid.NewGuid(), Guid.NewGuid());
+            await transaction.ExecuteStatementAsync(async (c, t) =>
+            {
+                await c.Security.SetPrincipalAsync(new(actor, true), c.Security.Snapshot.Revision, Guid.NewGuid(), t);
+                await c.Security.SetDatabasePermissionAsync(new(actor, sql_storage_engine.Security.StorageDatabasePermissionAction.ManagePrincipals, sql_storage_engine.Security.StoragePermissionEffect.Grant), false, c.Security.Snapshot.Revision, Guid.NewGuid(), t);
+                await c.Security.ChangePrincipalAsync(new(engine.DatabaseId, actor, target, sql_storage_engine.Security.StoragePrincipalOperation.Create, c.Security.Snapshot.Revision, Guid.NewGuid(), Guid.NewGuid()), t);
+                await c.Security.ChangePrincipalAsync(new(engine.DatabaseId, actor, target, sql_storage_engine.Security.StoragePrincipalOperation.Retire, c.Security.Snapshot.Revision, Guid.NewGuid(), Guid.NewGuid()), t);
+            });
+            if (args[1] == "lifecycle-committed") await transaction.CommitAsync();
+            Environment.Exit(42);
+        }
         if (args[1].StartsWith("security", StringComparison.Ordinal))
         {
             await transaction.ExecuteStatementAsync((c, t) => c.Security.SetPrincipalAsync(new(
