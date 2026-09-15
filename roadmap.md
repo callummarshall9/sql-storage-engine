@@ -1,5 +1,8 @@
 # SQL Storage Engine Product Roadmap
 
+> **Architecture pivot (2026-09-15):** [Portable storage core migration](docs/architecture-pivot.md) is the current target. The material below records the existing implementation and completed delivery history. New work follows the linked PLUG/SYS canonical backlog; this plan does not change the published API yet.
+
+
 ## 1. Product vision
 
 Build a small, understandable, durable SQL storage engine that can:

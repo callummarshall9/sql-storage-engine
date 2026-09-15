@@ -1,5 +1,8 @@
 # SQL Storage Engine User Stories
 
+> **Architecture pivot (2026-09-15):** [Portable storage core migration](docs/architecture-pivot.md) is the current target. The material below records the existing implementation and completed delivery history. New work follows the linked PLUG/SYS canonical backlog; this plan does not change the published API yet.
+
+
 ## 1. Purpose
 
 This backlog translates the product direction in [roadmap.md](roadmap.md) and the architecture in [storage-plan.md](storage-plan.md) into tickets suitable for a junior developer.

@@ -1,5 +1,8 @@
 # SQL Storage Engine quickstart
 
+> **Architecture pivot (2026-09-15):** [Portable storage core migration](docs/architecture-pivot.md) is the current target. The material below records the existing implementation and completed delivery history. New work follows the linked PLUG/SYS canonical backlog; this plan does not change the published API yet.
+
+
 `SqlStorageEngine` is a .NET 10 library providing page storage, buffer management, heap rows, persistent B+ trees,
 transactions, WAL/recovery, backup, integrity, and operational primitives. It is currently a storage-engine library,
 not a SQL parser or client/server database.
