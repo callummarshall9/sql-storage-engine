@@ -8,6 +8,7 @@ internal static class Program
 {
     private static async Task Main(string[] args)
     {
+        if (args[1] == "raw") { await PageCrashProbe.RunAsync(args); return; }
         var engine = await StorageEngine.OpenAsync(args[0]);
         var transaction = await engine.BeginTransactionAsync(new(TimeSpan.FromMinutes(1)));
         await File.WriteAllTextAsync(args[0] + ".probe-identity", JsonSerializer.Serialize(transaction.Identity));

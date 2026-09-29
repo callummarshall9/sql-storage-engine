@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="SqlStorageEngine.Core" Version="[1.0.0]" />
+    <PackageReference Include="SqlStorageEngine.Compatibility" Version="[1.17.0]" />
+  </ItemGroup>
+</Project>
