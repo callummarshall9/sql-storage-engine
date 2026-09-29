@@ -53,6 +53,10 @@ jobs:
           echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore
+        env:
+          # Ephemeral, step-scoped credential. The dependency package must grant this
+          # repository Actions read access; no credential is written to NuGet.config.
+          NuGetPackageSourceCredentials_github: Username=${{ github.actor }};Password=${{ secrets.GITHUB_TOKEN }};ValidAuthenticationTypes=Basic
         run: dotnet restore sql-storage-engine.sln --locked-mode
 
       - name: Build and test with warnings as errors

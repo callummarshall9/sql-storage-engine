@@ -15,18 +15,15 @@ internal sealed class AtomicPageImage : IAsyncDisposable
 
     private AtomicPageImage(string path, FileStream lease) { this.path = path; this.lease = lease; }
 
-    internal static AtomicPageImage Acquire(string path, bool creating)
+    internal static AtomicPageImage Acquire(string path, bool creating, Action<string>? directoryFlushed = null)
     {
         var full = Path.GetFullPath(path);
-        if (creating) Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        if (creating) RawStoreDirectory.CreateDurable(Path.GetDirectoryName(full)!, directoryFlushed);
         // Keep the lock inode across close/reopen, including replacement of the data inode.
         var lease = new FileStream(full + ".storage-lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         try
         {
             if (creating == File.Exists(full)) throw new IOException("Unexpected store existence.");
-            // A killed writer can leave only this bounded, uncommitted staging image.
-            var pending = full + ".pending";
-            if (File.Exists(pending)) TransactionDirectory.Delete(pending);
             return new(full, lease);
         }
         catch { lease.Dispose(); throw; }
@@ -67,11 +64,15 @@ internal sealed class AtomicPageImage : IAsyncDisposable
     internal async ValueTask PublishAsync(byte[] payload, CancellationToken token, string? phase,
         Func<string, ValueTask>? checkpoint)
     {
-        var pending = path + ".pending";
+        // A neighboring file is never evidence of ownership. Each publication claims a fresh
+        // name exclusively, and cleans it only after that claim succeeded in this process.
+        var pending = Path.Combine(Path.GetDirectoryName(path)!, ".page-stage-" + Guid.NewGuid().ToString("N") + ".pending");
+        var ownsPending = false;
         try
         {
             await using (var store = FilePageStore.CreateNew(pending, Size))
             {
+                ownsPending = true;
                 ulong id = 0;
                 for (var offset = 0; offset < payload.Length; offset += Size - Prefix)
                 {
@@ -88,10 +89,11 @@ internal sealed class AtomicPageImage : IAsyncDisposable
             }
             if (phase is not null && checkpoint is not null) await checkpoint(phase + "-written").ConfigureAwait(false);
             File.Move(pending, path, overwrite: true);
+            ownsPending = false;
             TransactionDirectory.Flush(path);
             if (phase is not null && checkpoint is not null) await checkpoint(phase + "-committed").ConfigureAwait(false);
         }
-        finally { if (File.Exists(pending)) TransactionDirectory.Delete(pending); }
+        finally { if (ownsPending) TransactionDirectory.Delete(pending); }
     }
 
     public ValueTask DisposeAsync() => lease.DisposeAsync();

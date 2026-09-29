@@ -38,7 +38,7 @@ public sealed class PageBackendResourceTests
         }
         Assert.That((await reopened.ResolveAsync(rejected)).Status, Is.EqualTo(CommitStatus.NotSubmitted));
         var path = System.Text.Encoding.UTF8.GetString(location.Location.ToArray());
-        Assert.That(File.Exists(path + ".pending"), Is.False);
+        Assert.That(Directory.GetFiles(Path.GetDirectoryName(path)!, ".page-stage-*.pending"), Is.Empty);
         TestContext.Out.WriteLine($"Exact 8388608 charged bytes, file {new FileInfo(path).Length} bytes, elapsed {watch.ElapsedMilliseconds} ms; no performance threshold.");
     }
 }

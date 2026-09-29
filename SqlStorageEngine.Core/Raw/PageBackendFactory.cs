@@ -15,6 +15,7 @@ public sealed class PageBackendFactory : IBackendFactory
     }
 
     internal Func<string, ValueTask>? Checkpoint { get; init; }
+    internal Action<string>? DirectoryFlushed { get; init; }
 
     public async ValueTask<IBackendStore> OpenAsync(BackendOpenRequest request, CancellationToken cancellationToken = default)
     {
@@ -24,7 +25,7 @@ public sealed class PageBackendFactory : IBackendFactory
         cancellationToken.ThrowIfCancellationRequested();
         var path = resolveLocation(request.Location);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        try { return await PageBackendStore.OpenAsync(path, request.Mode, options, Checkpoint, cancellationToken).ConfigureAwait(false); }
+        try { return await PageBackendStore.OpenAsync(path, request.Mode, options, Checkpoint, cancellationToken, DirectoryFlushed).ConfigureAwait(false); }
         catch (sql_storage_engine.Storage.StorageException) { throw new IOException("Page backend open or recovery failed."); }
         catch (IOException) { throw new IOException("Page backend open or recovery failed."); }
         catch (UnauthorizedAccessException) { throw new UnauthorizedAccessException("Page backend location access denied."); }

@@ -25,9 +25,10 @@ internal sealed class PageBackendStore : IBackendStore
     public StoreId Id => state.Id;
 
     internal static async ValueTask<PageBackendStore> OpenAsync(string path, BackendOpenMode mode,
-        PageBackendOptions options, Func<string, ValueTask>? checkpoint, CancellationToken token)
+        PageBackendOptions options, Func<string, ValueTask>? checkpoint, CancellationToken token,
+        Action<string>? directoryFlushed = null)
     {
-        var image = AtomicPageImage.Acquire(path, mode == BackendOpenMode.CreateNew);
+        var image = AtomicPageImage.Acquire(path, mode == BackendOpenMode.CreateNew, directoryFlushed);
         try
         {
             var state = mode == BackendOpenMode.CreateNew

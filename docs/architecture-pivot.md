@@ -73,7 +73,16 @@ The bounded raw page store uses the extracted `FilePageStore`, page identity/che
 It writes a complete checksummed staging page image, flushes it, atomically replaces the same-directory live image and
 synchronizes the directory. A separate persistent lock inode fences concurrent openers across replacement. The private
 `PGC1` physical format and state magic are distinct from SQL files; neither path silently converts the other's data.
-A killed writer can leave at most one bounded `.pending` image, discarded under the writer lease on reopen.
+Each publication exclusively creates a unique, fixed-length `.page-stage-<nonce>.pending` sibling. Cleanup is
+permitted only after that publication successfully created the file; opening a store never scans or deletes sidecars.
+The conventional `<store>.pending` name is not reserved and may contain another store. Normal completion, cancellation
+and exceptions remove the current writer's uncommitted stage. A killed writer can leave one bounded orphan image;
+reopen ignores it and recovers exclusively from the published image. Orphans are conservatively retained for explicit
+host-owned offline cleanup, because a filename or even a valid raw image does not prove ownership. Repeated process
+termination can accumulate such files; the logical record/receipt limits are not a filesystem free-space quota.
+Store creation synchronizes each ancestor directory entry, deepest first through the root, before publication, even
+when ancestors already exist after an interrupted creator. Publication then synchronizes the leaf directory. Failure
+to synchronize any ancestor aborts creation without publishing a store; retry repeats the complete synchronization chain.
 
 Neutral state, fingerprinted operation receipts and opaque collection records share one published image. Admission is
 published before the final data/receipt image. Recovery turns surviving Unknown admissions into durable Conflict before
@@ -123,6 +132,22 @@ Export/import into this new raw format is explicit downstream migration, never r
 
 No publication is performed by the author PR. On the reviewed merged source, verify the tree matches the accepted source
 and retain its exact SHA. Use .NET 10, the committed locks and a private cache; do not override `Version` globally.
+
+The restore step receives `NuGetPackageSourceCredentials_github` only in its runtime environment, using `github.actor`
+and the job's short-lived `GITHUB_TOKEN` with Basic authentication. No password is stored in NuGet.config, artifacts or
+source. The job's existing `contents: read` and `packages: write` permissions are retained because this job also publishes;
+no broader token scope is added. Restore uses the exact `github` source key in the committed source mapping.
+
+**Cross-repository prerequisite:** `SqlExecutionEngine.Storage.Abstractions` is a private package associated with
+`callummarshall9/tsql-execution-engine`. Its package administrator must grant `callummarshall9/sql-storage-engine`
+**Read** under the package's **Manage Actions access** settings before this repository's GITHUB_TOKEN can restore it.
+Existing local injected credentials prove feed connectivity, not that Actions grant. The grant cannot be inferred from
+repository admin permissions or a successful local PAT restore. If that package-level grant is unavailable, stop before
+publication and have the coordinator resolve package access; do not make the package public or increase token scopes
+implicitly. No publishing workflow is dispatched merely to test access. See the official
+[GitHub NuGet authentication guidance](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry)
+and [package Actions access controls](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages).
+
 
 ```sh
 dotnet restore sql-storage-engine.sln --locked-mode

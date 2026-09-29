@@ -57,7 +57,9 @@ internal sealed class PageConformanceDriver : BackendTestDriver
     {
         token.ThrowIfCancellationRequested();
         // Remove the flushed staging file: the actual publication rename must fail.
-        File.Delete(PathFor(location) + ".pending");
+        var path = PathFor(location);
+        var staging = Directory.GetFiles(Path.GetDirectoryName(path)!, ".page-stage-*.pending").Single();
+        File.Delete(staging);
         return ValueTask.FromResult<IAsyncDisposable>(new PagePublicationFault());
     }
 

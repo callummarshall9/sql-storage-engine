@@ -7,6 +7,13 @@ internal static class PageCrashProbe
     {
         var factory = new PageBackendFactory(_ => args[0])
         {
+            DirectoryFlushed = _ =>
+            {
+                if (args[2] != "directory-flushed") return;
+                Console.Write("CHECKPOINT\n");
+                Console.Out.Flush();
+                Task.Delay(Timeout.InfiniteTimeSpan).GetAwaiter().GetResult();
+            },
             Checkpoint = async stage =>
             {
                 if (stage != args[2]) return;
