@@ -3,3 +3,7 @@ obj/
 /packages/
 riderModule.iml
 /_ReSharper.Caches/
+# Local package-consumer lock includes unpublished candidate package hashes.
+/tests/PackageConsumer/packages.lock.json
+/artifacts/SqlStorageEngine.Core.*
+/artifacts/SqlStorageEngine.Compatibility.*

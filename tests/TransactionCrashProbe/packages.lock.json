@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "SqlExecutionEngine.Storage.Abstractions": {
+        "type": "Transitive",
+        "resolved": "1.0.0",
+        "contentHash": "bO/L2HPUkgzsYuuKgfzjKm+KxIffzP4CcD1o+wXofYBQ7+gwyDv5iRLe2E/WNMW0wg8m7rkd24rHtoppLTKKRA=="
+      },
+      "SqlStorageEngine.Compatibility": {
+        "type": "Project",
+        "dependencies": {
+          "SqlStorageEngine.Core": "[1.0.0, )"
+        }
+      },
+      "sqlstorageengine.core": {
+        "type": "Project",
+        "dependencies": {
+          "SqlExecutionEngine.Storage.Abstractions": "[1.0.0, 1.0.0]"
+        }
+      }
+    }
+  }
+}

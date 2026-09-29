@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackageId>SqlStorageEngine.Core</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Callum Marshall</Authors>
+    <Description>Generic page persistence, physical indexing, caching, durability and recovery.</Description>
+    <RepositoryUrl>https://github.com/callummarshall9/sql-storage-engine</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>architecture-pivot.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../docs/architecture-pivot.md" Pack="true" PackagePath="/" />
+    <PackageReference Include="SqlExecutionEngine.Storage.Abstractions" Version="[1.0.0]" />
+    <InternalsVisibleTo Include="sql-storage-engine" />
+    <InternalsVisibleTo Include="sql-storage-engine.UnitTests" />
+    <InternalsVisibleTo Include="TransactionCrashProbe" />
+  </ItemGroup>
+</Project>

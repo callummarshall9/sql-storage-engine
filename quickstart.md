@@ -1,3 +1,8 @@
+> Core split: the retained SQL API is prepared as `SqlStorageEngine.Compatibility` 1.17.0, with `SqlStorageEngine.Core`
+> 1.0.0 below it. Publication requires independent review and coordinator merge. Do not install Compatibility alongside
+> the old `SqlStorageEngine` package; both supply `sql-storage-engine.dll`. Raw neutral consumers use `PageBackendFactory`
+> from Core and the published Storage.Abstractions contract. See [the package boundary and publication procedure](docs/architecture-pivot.md#storage-79-extracted-page-core-and-retained-compatibility).
+
 # SQL Storage Engine quickstart
 
 > **Architecture pivot (2026-09-15):** [Portable storage core migration](docs/architecture-pivot.md) is the current target. The material below records the existing implementation and completed delivery history. New work follows the linked PLUG/SYS canonical backlog; this plan does not change the published API yet.

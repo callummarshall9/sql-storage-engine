@@ -53,28 +53,26 @@ jobs:
           echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
 
       - name: Restore
-        run: dotnet restore sql-storage-engine.sln
+        run: dotnet restore sql-storage-engine.sln --locked-mode
 
       - name: Build and test with warnings as errors
         run: dotnet test sql-storage-engine.sln --configuration Release --no-restore -warnaserror -m:1
 
-      - name: Pack
+      - name: Verify independently versioned package identities
         env:
           PACKAGE_VERSION: ${{ steps.version.outputs.value }}
-        run: >-
-          dotnet pack sql-storage-engine/sql-storage-engine.csproj
-          --configuration Release
-          --no-restore
-          -warnaserror
-          -p:Version=${PACKAGE_VERSION}
-          -p:PackageVersion=${PACKAGE_VERSION}
-          --output artifacts
+        run: |
+          test "${PACKAGE_VERSION}" = "$(dotnet msbuild sql-storage-engine/sql-storage-engine.csproj -getProperty:Version)"
+          test "$(dotnet msbuild SqlStorageEngine.Core/SqlStorageEngine.Core.csproj -getProperty:Version)" = "1.0.0"
 
-      - name: Publish package and symbols to GitHub Packages
+      - name: Pack core then compatibility at their committed versions
+        run: |
+          dotnet pack SqlStorageEngine.Core/SqlStorageEngine.Core.csproj --configuration Release --no-restore -warnaserror --output artifacts
+          dotnet pack sql-storage-engine/sql-storage-engine.csproj --configuration Release --no-restore -warnaserror --output artifacts
+
+      - name: Publish core before compatibility
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >-
-          dotnet nuget push "artifacts/*.nupkg"
-          --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-          --api-key "${GITHUB_TOKEN}"
-          --skip-duplicate
+        run: |
+          dotnet nuget push "artifacts/SqlStorageEngine.Core.1.0.0.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key "${GITHUB_TOKEN}"
+          dotnet nuget push "artifacts/SqlStorageEngine.Compatibility.${{ steps.version.outputs.value }}.nupkg" --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --api-key "${GITHUB_TOKEN}"
