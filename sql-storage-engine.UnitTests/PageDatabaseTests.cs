@@ -115,6 +115,32 @@ public sealed class PageDatabaseTests
     }
 
     [Test]
+    public async Task Free_RejectsCorruptAllocatedPageWithoutPublishingItToTheFreeList()
+    {
+        var (directory, path) = NewPath();
+        try
+        {
+            PageId id;
+            await using (var database = await PageDatabase.CreateAsync(path))
+            {
+                id = await database.AllocateAsync(PageType.Heap);
+                var original = new byte[database.PageSize];
+                await database.ReadAsync(id, original);
+                var corrupt = original.ToArray();
+                corrupt[PageHeaderCodec.EncodedLength + 10] ^= 0xff;
+                await database.WriteAsync(id, corrupt);
+                await ((Func<Task>)(async () => await database.FreeAsync(id))).Should().ThrowAsync<StorageCorruptionException>();
+                database.Header.FreeListHeadPageId.Should().BeNull();
+                await database.WriteAsync(id, original);
+                await database.FreeAsync(id);
+            }
+            await using var reopened = await PageDatabase.OpenAsync(path);
+            (await reopened.AllocateAsync(PageType.Heap)).Should().Be(id);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [Test]
     public async Task RandomizedAllocation_AgreesWithOwnershipModelAcrossReopen()
     {
         const int seed = 1701;

@@ -20,7 +20,7 @@ public sealed class PrincipalLifecycleCodecTests
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x31544143); BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), 11);
         var restored = CatalogCodec.Decode(bytes).Security;
         restored.DatabasePermissions.Should().BeEmpty(); restored.RetiredPrincipals.Should().BeEmpty(); restored.PrincipalDependencies.Should().BeEmpty();
-        CatalogCodec.FormatVersion.Should().Be(12);
+        CatalogCodec.FormatVersion.Should().Be(13);
     }
     [TestCase("duplicate")]
     [TestCase("live-retired")]

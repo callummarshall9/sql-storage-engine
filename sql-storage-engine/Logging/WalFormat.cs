@@ -100,12 +100,12 @@ public static class WalFormat
         return new WalReadResult(records, false, offset);
     }
 
+    private static readonly byte[] zeroChecksum = new byte[sizeof(uint)];
     private static uint Crc32WithZero(ReadOnlySpan<byte> bytes, int zeroOffset)
-    { var copy = bytes.ToArray(); copy.AsSpan(zeroOffset, 4).Clear(); return Crc32(copy); }
-    private static uint Crc32(ReadOnlySpan<byte> bytes)
     {
-        var crc = 0xffffffffu;
-        foreach (var value in bytes) { crc ^= value; for (var bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ (0xedb88320u & (uint)-(int)(crc & 1)); }
-        return ~crc;
+        var crc = IeeeCrc32.Update(0xffffffffu, bytes[..zeroOffset]);
+        crc = IeeeCrc32.Update(crc, zeroChecksum);
+        return ~IeeeCrc32.Update(crc, bytes[(zeroOffset + sizeof(uint))..]);
     }
+    private static uint Crc32(ReadOnlySpan<byte> bytes) => ~IeeeCrc32.Update(0xffffffffu, bytes);
 }

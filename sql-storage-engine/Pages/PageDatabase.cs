@@ -205,8 +205,16 @@ public sealed class PageDatabase : IPageStore, IPageAllocator
         {
             ThrowIfDisposed();
             if (pageId.Value >= _header.NextPageId.Value) throw new StorageResourceException($"Cannot free unallocated {pageId}.", new KeyNotFoundException());
-            var freeIds = await ReadFreeListIdsAsync(cancellationToken).ConfigureAwait(false);
-            if (freeIds.Contains(pageId)) throw new StorageResourceException($"Cannot free {pageId} twice.", new InvalidOperationException());
+            // Allocations overwrite the Free header before publication, so the page's
+            // validated type is the authoritative double-free check. Walking the
+            // entire free chain for every release makes bulk retirement quadratic.
+            var previous = new byte[PageSize];
+            await _store.ReadAsync(pageId, previous, cancellationToken).ConfigureAwait(false);
+            PageChecksum.ValidateChecksum(previous, PageSize);
+            var previousHeader = PageHeaderCodec.Read(previous);
+            previousHeader.Validate(pageId);
+            if (previousHeader.PageType == PageType.Free)
+                throw new StorageResourceException($"Cannot free {pageId} twice.", new InvalidOperationException());
             var page = CreatePage(pageId, PageType.Free);
             WriteFreeNext(page, _header.FreeListHeadPageId);
             PageChecksum.WriteChecksum(page, PageSize);

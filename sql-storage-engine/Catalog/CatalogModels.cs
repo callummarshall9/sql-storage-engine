@@ -272,14 +272,19 @@ public sealed record CatalogColumnEncryption
 public sealed record CatalogIdentity
 {
     public CatalogIdentity(long seed = 1, long increment = 1) : this(new BigInteger(seed), new BigInteger(increment)) { }
-    public CatalogIdentity(BigInteger seed, BigInteger increment)
+    public CatalogIdentity(BigInteger seed, BigInteger increment) : this(seed, increment, false) { }
+    public CatalogIdentity(long seed, long increment, bool? isNotForReplication) : this(new BigInteger(seed), new BigInteger(increment), isNotForReplication) { }
+    public CatalogIdentity(BigInteger seed, BigInteger increment, bool? isNotForReplication)
     {
         if (increment.IsZero) throw new ArgumentOutOfRangeException(nameof(increment));
         Seed = seed;
         Increment = increment;
+        IsNotForReplication = isNotForReplication;
     }
     public BigInteger Seed { get; }
     public BigInteger Increment { get; }
+    /// <summary>Original declaration flag; null means a legacy catalog did not record it.</summary>
+    public bool? IsNotForReplication { get; }
 }
 
 public sealed record CatalogCheckConstraint

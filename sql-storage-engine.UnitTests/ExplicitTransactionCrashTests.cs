@@ -22,9 +22,7 @@ public sealed class ExplicitTransactionCrashTests
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
         await database.Engine.DisposeAsync();
-        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../.."));
-        var probe = Path.Combine(root, "tests/TransactionCrashProbe/bin", configuration, "net10.0/TransactionCrashProbe.dll");
+        var probe = TestBuildPaths.Probe("TransactionCrashProbe");
         var start = new ProcessStartInfo("dotnet") { RedirectStandardError = true, RedirectStandardOutput = true };
         start.ArgumentList.Add(probe); start.ArgumentList.Add(database.Path); start.ArgumentList.Add(phase);
         using var child = Process.Start(start)!;

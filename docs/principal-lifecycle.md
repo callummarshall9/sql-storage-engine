@@ -22,7 +22,10 @@ Denied event path; the operation itself never grants authority on audit failure.
 and rolls back its effects. Cancellation aborts the root; disposal rolls back an unresolved root. Root receipts remain the
 only durable outcome oracle and ambiguous commits require resolution rather than guessed replay.
 
-Catalog format 12 prevents older readers ignoring retirement metadata. Formats 6–11 remain readable, with missing lifecycle
+Catalog format 13 retains format 12's protection against older readers ignoring retirement metadata and adds the original
+identity `NOT FOR REPLICATION` declaration flag. Formats 6–12 remain readable; their identity replication flags migrate as
+unknown, rather than an invented false value. Newly declared ordinary identities record false; explicit replication
+identities record true. Formats 6–11 migrate with missing lifecycle
 fields initialized empty. New writes upgrade the format; back up before migration. Quotas are 1,024 live principals,
 1,024 permanent tombstones, 1,024 database grants, 1,024 dependency entries plus existing 1,024 object grants, 4,096 mutation
 audits and 4 MiB security payload. There is no tombstone eviction or UUID recycling. Exact/one-over operations fail atomically.

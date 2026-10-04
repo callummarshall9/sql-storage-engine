@@ -13,8 +13,9 @@ namespace sql_storage_engine.Catalog;
 /// <summary>Encodes the self-describing bootstrap catalog without relying on user schemas.</summary>
 public static class CatalogCodec
 {
-    public const ushort FormatVersion = 12;
-    public const uint Magic = 0x32544143; // CAT1: catalog format 12.
+    public const ushort FormatVersion = 13;
+    public const uint Magic = 0x33544143; // CAT1: catalog format 13.
+    private const uint Version12Magic = 0x32544143;
     private const uint Version11Magic = 0x31544143;
     private const uint Version10Magic = 0x30544143;
     private const uint Version9Magic = 0x39544143;
@@ -183,14 +184,15 @@ public static class CatalogCodec
     {
         var reader = new Reader(source);
         var magic = reader.UInt32();
-        if (magic is not (Magic or Version11Magic or Version10Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
+        if (magic is not (Magic or Version12Magic or Version11Magic or Version10Magic or Version9Magic or Version8Magic or Version7Magic or Version6Magic))
             throw new StorageFormatException("Invalid bootstrap catalog magic number.");
         var version = reader.UInt16();
-        if (version is not (6 or 7 or 8 or 9 or 10 or 11 or FormatVersion) || version == 6 && magic != Version6Magic ||
+        if (version is not (6 or 7 or 8 or 9 or 10 or 11 or 12 or FormatVersion) || version == 6 && magic != Version6Magic ||
             version == 7 && magic != Version7Magic || version == 8 && magic != Version8Magic ||
             version == 9 && magic != Version9Magic ||
-            version == 10 && magic != Version10Magic || version == 11 && magic != Version11Magic || version == FormatVersion && magic != Magic)
+            version == 10 && magic != Version10Magic || version == 11 && magic != Version11Magic || version == 12 && magic != Version12Magic || version == FormatVersion && magic != Magic)
             throw new StorageFormatException($"Unsupported catalog format version {version}.");
+        reader.SetVersion(version);
         if (reader.UInt16() != 0) throw new StorageFormatException("Reserved catalog header bytes must be zero.");
         var tableCount = reader.Count();
         var indexCount = reader.Count();
@@ -461,7 +463,11 @@ public static class CatalogCodec
         WriteByte(output, column.Identity is null ? (byte)0 : (byte)1);
         WriteString(output, column.DefaultExpression ?? string.Empty);
         WriteString(output, column.ComputedExpression ?? string.Empty);
-        if (column.Identity is { } identity) { WriteBigInteger(output, identity.Seed); WriteBigInteger(output, identity.Increment); }
+        if (column.Identity is { } identity)
+        {
+            WriteBigInteger(output, identity.Seed); WriteBigInteger(output, identity.Increment);
+            WriteByte(output, identity.IsNotForReplication switch { null => (byte)0, false => (byte)1, true => (byte)2 });
+        }
         WriteByte(output, column.IsSparse ? (byte)1 : (byte)0); WriteByte(output, column.IsColumnSet ? (byte)1 : (byte)0);
         WriteByte(output, column.IsFileStream ? (byte)1 : (byte)0); WriteByte(output, column.IsHidden ? (byte)1 : (byte)0);
         WriteByte(output, (byte)column.GeneratedAlways);
@@ -528,8 +534,10 @@ public static class CatalogCodec
     {
         private readonly ReadOnlySpan<byte> _source;
         private int _offset;
+        private ushort _version;
         private Dictionary<(string Schema, string Name), SqlXmlSchemaCollection>? _xmlSchemas;
         public Reader(ReadOnlySpan<byte> source) => _source = source;
+        public void SetVersion(ushort version) => _version = version;
         public void SetXmlSchemas(IEnumerable<SqlXmlSchemaCollection> schemas) => _xmlSchemas = schemas.ToDictionary(
             schema => (schema.SchemaName, schema.Name));
         public bool End => _offset == _source.Length;
@@ -571,7 +579,16 @@ public static class CatalogCodec
             var defaultExpression = String();
             var computedExpression = String();
             CatalogIdentity? identity = null;
-            if (hasIdentity) identity = new CatalogIdentity(BigInteger(), BigInteger());
+            if (hasIdentity)
+            {
+                var seed = BigInteger(); var increment = BigInteger();
+                bool? replication = _version < 13 ? null : Byte() switch
+                {
+                    0 => null, 1 => false, 2 => true,
+                    _ => throw new StorageFormatException("Invalid identity replication flag.")
+                };
+                identity = new CatalogIdentity(seed, increment, replication);
+            }
             var sparse = Boolean(); var columnSet = Boolean(); var fileStream = Boolean(); var hidden = Boolean();
             var generated = (CatalogGeneratedAlwaysKind)Byte(); var rawEncryption = Byte();
             if (UInt16() != 0) throw new StorageFormatException("Reserved column-facet bytes must be zero.");

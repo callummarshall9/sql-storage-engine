@@ -34,7 +34,7 @@ public sealed class ProductionSupportMatrixTests
     private static string DocumentPath(string name) => RepositoryPath("docs", name);
     private static string RepositoryPath(params string[] parts)
     {
-        var root = Path.GetFullPath(Path.Combine(TestContext.CurrentContext.TestDirectory, "..", "..", "..", ".."));
+        var root = TestBuildPaths.Repository;
         return Path.Combine([root, .. parts]);
     }
 }

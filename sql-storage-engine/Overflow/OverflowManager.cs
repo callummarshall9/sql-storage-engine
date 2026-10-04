@@ -72,7 +72,16 @@ public sealed class OverflowManager
     {
         OverflowReferenceCodec.Validate(reference);
         var output = new byte[checked((int)reference.TotalLength)];
+        await ValidateChainAsync(reference, output, null, cancellationToken).ConfigureAwait(false);
+        return output;
+    }
+
+    private async ValueTask ValidateChainAsync(OverflowReference reference, byte[]? output,
+        List<PageId>? pages, CancellationToken cancellationToken)
+    {
+        OverflowReferenceCodec.Validate(reference);
         var written = 0;
+        var total = checked((int)reference.TotalLength);
         var current = reference.FirstPageId;
         HashSet<PageId> visited = [];
         for (var pageNumber = 0; pageNumber < OverflowReferenceCodec.MaximumChainLength; pageNumber++)
@@ -80,26 +89,27 @@ public sealed class OverflowManager
             cancellationToken.ThrowIfCancellationRequested();
             if (!visited.Add(current)) throw new StorageCorruptionException($"Cycle detected in overflow chain at {current}.");
             OverflowPageHeader header;
-            ReadOnlyMemory<byte> payload;
             try
             {
                 using var pin = await _bufferPool.GetPageAsync(current, cancellationToken).ConfigureAwait(false);
                 header = OverflowPageCodec.ReadHeader(pin.Memory.Span, current);
-                payload = OverflowPageCodec.ReadPayload(pin.Memory.Span, current);
+                var length = checked((int)header.UsedLength);
+                if (length > total - written) throw new StorageCorruptionException("Overflow chain is longer than its reference length.");
+                // Copy while pinned: ReadHeader has already validated checksum,
+                // ownership, next-page encoding and the payload bounds.
+                if (output is not null)
+                    pin.Memory.Span.Slice(OverflowPageCodec.HeaderLength, length).CopyTo(output.AsSpan(written));
+                written = checked(written + length);
             }
             catch (StorageResourceException exception)
             {
                 throw new StorageCorruptionException($"Overflow chain references inaccessible {current}.", exception);
             }
-
-            var remaining = output.Length - written;
-            if (payload.Length > remaining) throw new StorageCorruptionException("Overflow chain is longer than its reference length.");
-            payload.Span.CopyTo(output.AsSpan(written));
-            written = checked(written + payload.Length);
-            if (written == output.Length)
+            pages?.Add(current);
+            if (written == total)
             {
                 if (header.NextPageId is not null) throw new StorageCorruptionException("Overflow chain continues beyond its reference length.");
-                return output;
+                return;
             }
             if (header.NextPageId is not { } next) throw new StorageCorruptionException("Overflow chain is truncated.");
             current = next;
@@ -107,20 +117,11 @@ public sealed class OverflowManager
         throw new StorageCorruptionException($"Overflow chain exceeds {OverflowReferenceCodec.MaximumChainLength} pages.");
     }
 
-    /// <summary>Validates and frees every page exclusively owned by a chain.</summary>
+    /// <summary>Validates the whole chain before freeing any exclusively owned page.</summary>
     public async ValueTask FreeAsync(OverflowReference reference, CancellationToken cancellationToken = default)
     {
-        _ = await ReadAsync(reference, cancellationToken).ConfigureAwait(false);
         List<PageId> pages = [];
-        var current = reference.FirstPageId;
-        while (true)
-        {
-            pages.Add(current);
-            using var pin = await _bufferPool.GetPageAsync(current, cancellationToken).ConfigureAwait(false);
-            var header = OverflowPageCodec.ReadHeader(pin.Memory.Span, current);
-            if (header.NextPageId is not { } next) break;
-            current = next;
-        }
+        await ValidateChainAsync(reference, null, pages, cancellationToken).ConfigureAwait(false);
         for (var index = pages.Count - 1; index >= 0; index--)
         {
             await _bufferPool.DiscardPageAsync(pages[index], cancellationToken).ConfigureAwait(false);

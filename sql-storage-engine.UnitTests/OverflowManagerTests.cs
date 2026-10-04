@@ -10,6 +10,42 @@ namespace sql_storage_engine.UnitTests;
 
 public sealed class OverflowManagerTests
 {
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task Free_ValidatesTheEntireChainBeforeRetiringAnyPage(bool corruptLastPage)
+    {
+        await using var store = new InMemoryPageStore();
+        var allocator = new FailingAllocator(store, int.MaxValue);
+        await using var pool = new BufferPool(store, 4, leaveOpen: true);
+        var manager = new OverflowManager(pool, allocator);
+        var capacity = OverflowPageCodec.GetPayloadCapacity(store.PageSize);
+        var reference = await manager.WriteAsync(new byte[capacity + 10]);
+        if (corruptLastPage)
+        {
+            using var pin = await pool.GetPageAsync(allocator.Allocated[^1]);
+            pin.Memory.Span[OverflowPageCodec.HeaderLength] ^= 1;
+            pin.MarkDirty(new LogSequenceNumber(0));
+        }
+        var invalid = corruptLastPage ? reference : reference with { TotalLength = capacity + 11 };
+        await ((Func<Task>)(async () => await manager.FreeAsync(invalid)))
+            .Should().ThrowAsync<StorageCorruptionException>();
+        allocator.Freed.Should().BeEmpty();
+        pool.PinnedPageCount.Should().Be(0);
+    }
+
+    [Test]
+    public async Task Free_ValidatedChainRetiresEveryOwnedPageInReverseOrder()
+    {
+        await using var store = new InMemoryPageStore();
+        var allocator = new FailingAllocator(store, int.MaxValue);
+        await using var pool = new BufferPool(store, 4, leaveOpen: true);
+        var manager = new OverflowManager(pool, allocator);
+        var reference = await manager.WriteAsync(new byte[20000]);
+        await manager.FreeAsync(reference);
+        allocator.Freed.Should().Equal(allocator.Allocated.AsEnumerable().Reverse());
+        pool.PinnedPageCount.Should().Be(0);
+    }
+
     [TestCase(100)]
     [TestCase(20000)]
     public async Task WriteAndRead_OneAndMultiplePagesRoundTrip(int length)
