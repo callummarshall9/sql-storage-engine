@@ -1,11 +1,15 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
+using sql_storage_engine.Exposures.Logging;
 using AwesomeAssertions;
 using System.Buffers.Binary;
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Logging;
 using sql_storage_engine.Storage;
+using sql_storage_engine.Models.Logging;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class WalFormatTests
 {
     // Independent IEEE CRC-32 golden values from Python zlib.crc32 over the
@@ -24,53 +28,94 @@ public sealed class WalFormatTests
     public void RecordChecksum_MatchesIndependentGoldenAndRejectsCorruption(int length, uint checksum)
     {
         var payload = Enumerable.Range(0, length).Select(i => (byte)(i * 37 + 11)).ToArray();
-        var bytes = WalFormat.WriteRecord(new(new(10), new(4), new(2), WalRecordType.PageChange, payload));
+        var bytes = WalRecordExposure.WriteWalRecord(new sql_storage_engine.Models.Logging.WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 10 }, PreviousLsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 4 }, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 2 }, Type = WalRecordType.PageChange, Payload = payload });
         BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(36)).Should().Be(checksum);
-        WalFormat.ReadRecord(bytes).Payload.ToArray().Should().Equal(payload);
+        WalRecordExposure.ReadWalRecord(bytes).Payload.ToArray().Should().Equal(payload);
         bytes[36] ^= 1;
-        ((Func<WalRecord>)(() => WalFormat.ReadRecord(bytes))).Should().Throw<StorageCorruptionException>();
+        ((Func<WalRecord>)(() => WalRecordExposure.ReadWalRecord(bytes))).Should().Throw<StorageCorruptionException>();
         bytes[36] ^= 1;
         bytes[^1] ^= 1;
-        ((Func<WalRecord>)(() => WalFormat.ReadRecord(bytes))).Should().Throw<StorageCorruptionException>();
+        ((Func<WalRecord>)(() => WalRecordExposure.ReadWalRecord(bytes))).Should().Throw<StorageCorruptionException>();
     }
 
-    [TestCase(WalRecordType.Begin)] [TestCase(WalRecordType.PageChange)] [TestCase(WalRecordType.Commit)]
-    [TestCase(WalRecordType.Rollback)] [TestCase(WalRecordType.Checkpoint)]
+    [TestCase(WalRecordType.Begin)]
+    [TestCase(WalRecordType.PageChange)]
+    [TestCase(WalRecordType.Commit)]
+    [TestCase(WalRecordType.Rollback)]
+    [TestCase(WalRecordType.Checkpoint)]
+    [TestCase(WalRecordType.Compensation)]
     public void EveryRecordType_RoundTrips(WalRecordType type)
     {
-        var record = new WalRecord(new LogSequenceNumber(10), new LogSequenceNumber(4), new TransactionId(2), type, new byte[] { 1, 2 });
-        var decoded = WalFormat.ReadRecord(WalFormat.WriteRecord(record));
-        (decoded with { Payload = record.Payload }).Should().Be(record);
+        var record = new WalRecord
+        {
+            Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber
+            {
+                Value = 10
+            },
+            PreviousLsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber
+            {
+                Value = 4
+            },
+            TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId
+            {
+                Value = 2
+            },
+            Type = type,
+            Payload = new byte[]
+            {
+                1,
+                2
+            }
+        };
+        var decoded = WalRecordExposure.ReadWalRecord(WalRecordExposure.WriteWalRecord(record));
+        (decoded with
+        {
+            Payload = record.Payload
+        }
+
+        ).Should().Be(record);
         decoded.Payload.ToArray().Should().Equal(record.Payload.ToArray());
     }
 
     [Test]
     public void SegmentHeader_RoundTripsAndHasGoldenBytes()
     {
-        var header = new WalSegmentHeader(new DatabaseId(Guid.Parse("00112233-4455-6677-8899-aabbccddeeff")), 2, 3);
-        var bytes = WalFormat.WriteSegmentHeader(header);
+        var header = new WalSegmentHeader
+        {
+            DatabaseId = new sql_storage_engine.Models.Identifiers.DatabaseId
+            {
+                Value = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff")
+            },
+            Timeline = 2,
+            SegmentNumber = 3
+        };
+        var bytes = WalSegmentHeaderExposure.WriteWalSegmentHeader(header);
         BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(44)).Should().Be(0x99469d1fu);
-        WalFormat.ReadSegmentHeader(bytes).Should().Be(header);
+        WalSegmentHeaderExposure.ReadWalSegmentHeader(bytes).Should().Be(header);
         Convert.ToHexString(bytes[..40]).Should().Be("57414C310100000000112233445566778899AABBCCDDEEFF02000000000000000300000000000000");
     }
 
     [Test]
     public void UnknownVersionsTypesAndModifiedBytes_AreRejected()
     {
-        var bytes = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(1), default, new TransactionId(1), WalRecordType.Begin, new byte[] { 1 }));
-        bytes[4] = 2; ((Func<WalRecord>)(() => WalFormat.ReadRecord(bytes))).Should().Throw<StorageFormatException>();
-        bytes = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(1), default, new TransactionId(1), WalRecordType.Begin, new byte[] { 1 }));
-        bytes[6] = 99; ((Func<WalRecord>)(() => WalFormat.ReadRecord(bytes))).Should().Throw<StorageFormatException>();
-        bytes = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(1), default, new TransactionId(1), WalRecordType.Begin, new byte[] { 1 }));
-        bytes[^1] ^= 1; ((Func<WalRecord>)(() => WalFormat.ReadRecord(bytes))).Should().Throw<StorageCorruptionException>();
+        var bytes = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 1 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Begin, Payload = new byte[] { 1 } });
+        bytes[4] = 2;
+        ((Func<WalRecord>)(() => WalRecordExposure.ReadWalRecord(bytes))).Should().Throw<StorageFormatException>();
+        bytes = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 1 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Begin, Payload = new byte[] { 1 } });
+        bytes[6] = 99;
+        ((Func<WalRecord>)(() => WalRecordExposure.ReadWalRecord(bytes))).Should().Throw<StorageFormatException>();
+        bytes = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 1 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Begin, Payload = new byte[] { 1 } });
+        bytes[^1] ^= 1;
+        ((Func<WalRecord>)(() => WalRecordExposure.ReadWalRecord(bytes))).Should().Throw<StorageCorruptionException>();
     }
 
     [Test]
     public void IncompleteTailIsDistinguishedFromMidLogCorruption()
     {
-        var record = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(1), default, new TransactionId(1), WalRecordType.Begin, new byte[] { 1 }));
-        WalFormat.ReadRecords(record[..^1]).HasIncompleteTail.Should().BeTrue();
-        var two = record.Concat(record).ToArray(); two[10] ^= 1;
-        ((Func<WalReadResult>)(() => WalFormat.ReadRecords(two))).Should().Throw<StorageCorruptionException>();
+        var record = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 1 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Begin, Payload = new byte[] { 1 } });
+        WalReadResultExposure.ReadWalReadResult(record[..^1]).HasIncompleteTail.Should().BeTrue();
+        var two = record.Concat(record).ToArray();
+        two[10] ^= 1;
+        ((Func<WalReadResult>)(() => WalReadResultExposure.ReadWalReadResult(two))).Should().Throw<StorageCorruptionException>();
     }
 }

@@ -1,11 +1,20 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
 using sql_storage_engine.Catalog;
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Rows;
 using sql_storage_engine.Transactions;
+using sql_storage_engine.Models;
+using sql_storage_engine.Models.Rows;
+using sql_storage_engine.Exposures.Rows;
+using sql_storage_engine.Models.Catalog;
+using sql_storage_engine.Exposures.Catalog;
+
+using sql_storage_engine.Models.Storage;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExecutionEngineGapClosureTests
 {
     [Test]
@@ -16,15 +25,16 @@ public sealed class ExecutionEngineGapClosureTests
         try
         {
             DatabaseId incarnation;
-            await using (var first = await StorageEngine.CreateAsync(firstPath))
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure first = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(firstPath))
             {
-                incarnation = first.DatabaseId;
-                first.Catalog.DatabaseId.Should().Be(incarnation);
+                incarnation = first.ReadDatabaseId();
+                first.ReadCatalog().ReadDatabaseId().Should().Be(incarnation);
             }
-            await using (var reopened = await StorageEngine.OpenAsync(firstPath))
-                reopened.DatabaseId.Should().Be(incarnation);
-            await using (var second = await StorageEngine.CreateAsync(secondPath))
-                second.DatabaseId.Should().NotBe(incarnation);
+
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(firstPath))
+                reopened.ReadDatabaseId().Should().Be(incarnation);
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure second = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(secondPath))
+                second.ReadDatabaseId().Should().NotBe(incarnation);
         }
         finally
         {
@@ -39,32 +49,27 @@ public sealed class ExecutionEngineGapClosureTests
         var path = TemporaryPath();
         try
         {
-            await using var engine = await StorageEngine.CreateAsync(path);
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path);
             await ((Func<Task>)(async () => await engine.ExecuteStatementAsync(async (statement, token) =>
             {
-                var table = await statement.CreateTableAsync(
-                    new CatalogTableName("app", "reports", "failed_target"), Columns(), cancellationToken: token);
-                await (await statement.OpenTableAsync(table.Id, token))
-                    .InsertAsync(new Row([SqlValue.Integer(1)]), token);
+                var table = await statement.CreateCatalogTableAsync(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","reports","failed_target"),Columns(),cancellationToken: token);
+                await (await statement.OpenTableAsync(table.Id,token)).InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]),token);
                 throw new InvalidOperationException("fail after target population");
             }))).Should().ThrowAsync<InvalidOperationException>();
-            engine.Catalog.TryGetTable(new CatalogTableName("app", "reports", "failed_target"), out _)
-                .Should().BeFalse();
-
+            engine.ReadCatalog().TryGetTable(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","reports","failed_target"),out _).Should().BeFalse();
             await engine.ExecuteStatementAsync(async (statement, token) =>
             {
-                var table = await statement.CreateTableAsync(
-                    new CatalogTableName("app", "reports", "target"), Columns(), cancellationToken: token);
-                await (await statement.OpenTableAsync(table.Id, token))
-                    .InsertAsync(new Row([SqlValue.Integer(7)]), token);
+                var table = await statement.CreateCatalogTableAsync(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","reports","target"),Columns(),cancellationToken: token);
+                await (await statement.OpenTableAsync(table.Id,token)).InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(7)]),token);
             });
-
-            engine.Catalog.TryGetTable(new CatalogTableName("app", "reports", "target"), out var created)
-                .Should().BeTrue();
+            engine.ReadCatalog().TryGetTable(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","reports","target"),out var created).Should().BeTrue();
             var rows = await CollectAsync((await engine.OpenTableAsync(created!.Id)).ScanAsync());
             ((IntegerSqlValue)rows.Single().Row.Values[0]).Value.Should().Be(7);
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
     [Test]
@@ -73,22 +78,23 @@ public sealed class ExecutionEngineGapClosureTests
         var path = TemporaryPath();
         try
         {
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                await engine.CreateTableAsync(new CatalogTableName("app", "sales", "orders"), Columns());
-                await engine.CreateTableAsync(new CatalogTableName("app", "archive", "orders"), Columns());
-                engine.Catalog.TryGetTable("orders", out _).Should().BeFalse("an unqualified duplicate is ambiguous");
-                engine.Catalog.TryGetTable(new CatalogTableName("app", "sales", "orders"), out var table)
-                    .Should().BeTrue();
-                table!.QualifiedName.QualifiedName.Should().Be("[app].[sales].[orders]");
+                await engine.CreateCatalogTableAsync(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","sales","orders"),Columns());
+                await engine.CreateCatalogTableAsync(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","archive","orders"),Columns());
+                engine.ReadCatalog().TryGetTable("orders",out _).Should().BeFalse("an unqualified duplicate is ambiguous");
+                engine.ReadCatalog().TryGetTable(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","sales","orders"),out var table).Should().BeTrue();
+                sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.FormatCatalogTableName(table!.QualifiedName).Should().Be("[app].[sales].[orders]");
             }
 
-            await using var reopened = await StorageEngine.OpenAsync(path);
-            reopened.Catalog.TryGetTable(new CatalogTableName("app", "archive", "orders"), out var archived)
-                .Should().BeTrue();
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path);
+            reopened.ReadCatalog().TryGetTable(sql_storage_engine.Exposures.Catalog.CatalogTableNameExposure.CreateCatalogTableName("app","archive","orders"),out var archived).Should().BeTrue();
             archived!.SchemaName.Should().Be("archive");
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
     [Test]
@@ -97,29 +103,30 @@ public sealed class ExecutionEngineGapClosureTests
         var path = TemporaryPath();
         try
         {
-            await using var engine = await StorageEngine.CreateAsync(path);
-            var table = await engine.CreateTableAsync("events", [
-                new CatalogColumn(new ColumnId(1), "tenant", SqlType.Int, false),
-                new CatalogColumn(new ColumnId(2), "sequence", SqlType.Int, false),
-                new CatalogColumn(new ColumnId(3), "value", SqlType.NVarChar(20), false)]);
-            var index = await engine.CreateIndexAsync("by_tenant_sequence", table.Id, false, [
-                new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.Last),
-                new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.Last)]);
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path);
+            var table = await engine.CreateCatalogTableAsync("events",[sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "tenant", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "sequence", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 3 }, "value", sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateNVarCharSqlType(20), false)]);
+            var index = await engine.CreateCatalogIndexAsync("by_tenant_sequence",table.Id,false,[sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.Last), sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 },SortDirection.Ascending,NullSortOrder.Last)]);
             var rows = await engine.OpenTableAsync(table.Id);
-            foreach (var values in new[] { (1, 1), (1, 2), (2, 1), (3, 1) })
-                await rows.InsertAsync(new Row([SqlValue.Integer(values.Item1), SqlValue.Integer(values.Item2),
-                    SqlValue.Text($"{values.Item1}:{values.Item2}")]));
+            foreach (var values in new[]
+            {
+                (1, 1),
+                (1, 2),
+                (2, 1),
+                (3, 1)
+            }
 
+            )
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(values.Item1), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(values.Item2), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue($"{values.Item1}:{values.Item2}")]));
             var storageIndex = await engine.OpenIndexAsync(index.Id);
-            var tenantOne = await CollectAsync(storageIndex.ScanAsync(new StorageIndexRange(
-                new StorageIndexBound([SqlValue.Integer(1)]),
-                new StorageIndexBound([SqlValue.Integer(1)]))));
+            var tenantOne = await CollectAsync(storageIndex.ScanAsync(new StorageIndexRange { LowerBound = sql_storage_engine.Exposures.Storage.StorageQueryExposure.CreateStorageIndexBound([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]), UpperBound = sql_storage_engine.Exposures.Storage.StorageQueryExposure.CreateStorageIndexBound([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]), Direction = ScanDirection.Ascending }));
             tenantOne.Should().HaveCount(2);
-            var afterTenantOne = await CollectAsync(storageIndex.ScanAsync(new StorageIndexRange(
-                new StorageIndexBound([SqlValue.Integer(1)], inclusive: false))));
+            var afterTenantOne = await CollectAsync(storageIndex.ScanAsync(new StorageIndexRange { LowerBound = sql_storage_engine.Exposures.Storage.StorageQueryExposure.CreateStorageIndexBound([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)], inclusive: false), UpperBound = null, Direction = ScanDirection.Ascending }));
             afterTenantOne.Should().HaveCount(2);
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
     [Test]
@@ -128,33 +135,28 @@ public sealed class ExecutionEngineGapClosureTests
         var path = TemporaryPath();
         try
         {
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                var table = await engine.CreateTableAsync("items", [
-                    new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false),
-                    new CatalogColumn(new ColumnId(2), "name", SqlType.NVarChar(50), false)]);
-                var index = await engine.CreateIndexAsync("items_cover", table.Id, true,
-                    [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.Last)],
-                    new CatalogBTreeIndexOptions(includedColumns: [new ColumnId(2)]));
+                var table = await engine.CreateCatalogTableAsync("items",[sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "id", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "name", sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateNVarCharSqlType(50), false)]);
+                var index = await engine.CreateCatalogIndexAsync("items_cover",table.Id,true,[sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.Last)],sql_storage_engine.Exposures.Catalog.CatalogBTreeIndexOptionsExposure.CreateCatalogBTreeIndexOptions(columnIds: [new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }]));
                 var rows = await engine.OpenTableAsync(table.Id);
-                var rowId = await rows.InsertAsync(new Row([SqlValue.Integer(7), SqlValue.Text("before")]));
+                var rowId = await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(7), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("before")]));
                 var storageIndex = await engine.OpenIndexAsync(index.Id);
-                (await storageIndex.FindEntriesAsync([SqlValue.Integer(7)])).Single().IncludedValues[new ColumnId(2)]
-                    .Should().Be(SqlValue.Text("before"));
-
-                await rows.UpdateAsync(rowId, new RowUpdate([new ColumnUpdate(1, SqlValue.Text("after"))]));
-                (await storageIndex.FindEntriesAsync([SqlValue.Integer(7)])).Single().IncludedValues[new ColumnId(2)]
-                    .Should().Be(SqlValue.Text("after"));
+                (await storageIndex.FindEntriesAsync([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(7)])).Single().IncludedValues[new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("before"));
+                await rows.UpdateAsync(rowId,RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 1, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("after") }]));
+                (await storageIndex.FindEntriesAsync([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(7)])).Single().IncludedValues[new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("after"));
             }
 
-            await using var reopened = await StorageEngine.OpenAsync(path);
-            reopened.Catalog.TryGetTable("items", out var tableDefinition).Should().BeTrue();
-            var indexDefinition = reopened.Catalog.GetIndexes(tableDefinition!.Id).Single();
-            var covered = await (await reopened.OpenIndexAsync(indexDefinition.Id))
-                .FindEntriesAsync([SqlValue.Integer(7)]);
-            covered.Single().IncludedValues[new ColumnId(2)].Should().Be(SqlValue.Text("after"));
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path);
+            reopened.ReadCatalog().TryGetTable("items",out var tableDefinition).Should().BeTrue();
+            var indexDefinition = reopened.ReadCatalog().GetIndexes(tableDefinition!.Id).Single();
+            var covered = await (await reopened.OpenIndexAsync(indexDefinition.Id)).FindEntriesAsync([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(7)]);
+            covered.Single().IncludedValues[new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("after"));
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
     [Test]
@@ -163,25 +165,22 @@ public sealed class ExecutionEngineGapClosureTests
         var path = TemporaryPath();
         try
         {
-            await using var engine = await StorageEngine.CreateAsync(path);
-            var table = await engine.CreateTableAsync("numbers", Columns());
-            var index = await engine.CreateIndexAsync("numbers_by_id", table.Id, true,
-                [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.Last)]);
-
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path);
+            var table = await engine.CreateCatalogTableAsync("numbers",Columns());
+            var index = await engine.CreateCatalogIndexAsync("numbers_by_id",table.Id,true,[sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.Last)]);
             await ((Func<Task>)(async () => await engine.ExecuteStatementAsync(async (statement, token) =>
             {
-                var rows = await statement.OpenTableAsync(table.Id, token);
-                await rows.InsertAsync(new Row([SqlValue.Integer(1)]), token);
-                await rows.InsertAsync(new Row([SqlValue.Integer(2)]), token);
+                var rows = await statement.OpenTableAsync(table.Id,token);
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]),token);
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2)]),token);
                 throw new InvalidOperationException("abort statement");
             }))).Should().ThrowAsync<InvalidOperationException>();
             (await engine.GetTableStatisticsAsync(table.Id)).RowCount.Should().Be(0);
-
             await engine.ExecuteStatementAsync(async (statement, token) =>
             {
-                var rows = await statement.OpenTableAsync(table.Id, token);
-                await rows.InsertAsync(new Row([SqlValue.Integer(1)]), token);
-                await rows.InsertAsync(new Row([SqlValue.Integer(2)]), token);
+                var rows = await statement.OpenTableAsync(table.Id,token);
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]),token);
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2)]),token);
             });
             var tableStatistics = await engine.GetTableStatisticsAsync(table.Id);
             tableStatistics.RowCount.Should().Be(2);
@@ -193,7 +192,10 @@ public sealed class ExecutionEngineGapClosureTests
             indexStatistics.Histogram.Should().HaveCount(2);
             File.Exists(path + ".statement-undo").Should().BeFalse();
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
     [Test]
@@ -203,40 +205,44 @@ public sealed class ExecutionEngineGapClosureTests
         try
         {
             CatalogTable table;
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (sql_storage_engine.Exposures.Storage.StorageSessionExposure engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                table = await engine.CreateTableAsync("recovery", Columns());
+                table = await engine.CreateCatalogTableAsync("recovery",Columns());
                 var rows = await engine.OpenTableAsync(table.Id);
-                await rows.InsertAsync(new Row([SqlValue.Integer(1)]));
-                await using var journal = await StatementJournal.CreateAsync(path, CancellationToken.None);
-                await rows.InsertAsync(new Row([SqlValue.Integer(2)]));
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]));
+                await using var journal = await sql_storage_engine.Exposures.Transactions.StatementJournalExposure.CreateStatementJournalExposureAsync(path, CancellationToken.None);
+                await rows.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2)]));
             }
 
             File.Exists(path + ".statement-undo").Should().BeTrue();
-            await using var recovered = await StorageEngine.OpenAsync(path);
+            await using sql_storage_engine.Exposures.Storage.StorageSessionExposure recovered = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path);
             var values = new List<long>();
             await foreach (var row in (await recovered.OpenTableAsync(table.Id)).ScanAsync())
                 values.Add(((IntegerSqlValue)row.Row.Values[0]).Value);
             values.Should().Equal(1);
             File.Exists(path + ".statement-undo").Should().BeFalse();
         }
-        finally { DeleteDatabase(path); }
+        finally
+        {
+            DeleteDatabase(path);
+        }
     }
 
-    private static CatalogColumn[] Columns() =>
-        [new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false)];
-
+    private static CatalogColumn[] Columns() => [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "id", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false)];
     private static async Task<List<T>> CollectAsync<T>(IAsyncEnumerable<T> source)
     {
         List<T> result = [];
-        await foreach (var item in source) result.Add(item);
+        await foreach (var item in source)
+            result.Add(item);
         return result;
     }
 
     private static string TemporaryPath() => Path.Combine(Path.GetTempPath(), $"storage-gaps-{Guid.NewGuid():N}.db");
     private static void DeleteDatabase(string path)
     {
-        if (File.Exists(path)) File.Delete(path);
-        if (File.Exists(path + ".statement-undo")) File.Delete(path + ".statement-undo");
+        if (File.Exists(path))
+            File.Delete(path);
+        if (File.Exists(path + ".statement-undo"))
+            File.Delete(path + ".statement-undo");
     }
 }

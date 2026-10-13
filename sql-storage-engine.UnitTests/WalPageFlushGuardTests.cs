@@ -1,11 +1,14 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
 using sql_storage_engine.Buffers;
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Logging;
 using sql_storage_engine.Pages;
+using sql_storage_engine.Models.Logging;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class WalPageFlushGuardTests
 {
     [Test]
@@ -14,11 +17,12 @@ public sealed class WalPageFlushGuardTests
         var order = new List<string>();
         await using var store = new OrderedStore(order);
         var device = new OrderedWalDevice(order);
-        var wal = await WriteAheadLog.OpenAsync(device);
-        var record = await wal.AppendAsync(new TransactionId(1), WalRecordType.PageChange, default, ReadOnlyMemory<byte>.Empty);
-        await using var pool = new BufferPool(store, 1, leaveOpen: true, new WalPageFlushGuard(wal));
+        var wal = await sql_storage_engine.Exposures.Logging.WriteAheadLogExposure.OpenAsync(device);
+        var record = await wal.AppendAsync(new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, WalRecordType.PageChange, default, ReadOnlyMemory<byte>.Empty);
+        await using sql_storage_engine.Exposures.Buffers.BufferPoolExposure pool = new sql_storage_engine.Exposures.Buffers.BufferPoolExposure(store, 1, leaveOpen: true, wal);
         var id = await store.AllocateAsync(PageType.Heap);
-        using (var pin = await pool.GetPageAsync(id)) pin.MarkDirty(record.Lsn);
+        using (var pin = await pool.GetPageAsync(id))
+            pin.MarkDirty(record.Lsn);
         order.Clear();
         await pool.FlushPageAsync(id);
         order.Should().Equal("wal-flush", "page-write", "page-flush");
@@ -30,11 +34,12 @@ public sealed class WalPageFlushGuardTests
         var order = new List<string>();
         await using var store = new OrderedStore(order);
         var device = new OrderedWalDevice(order);
-        var wal = await WriteAheadLog.OpenAsync(device);
-        var record = await wal.AppendAsync(new TransactionId(1), WalRecordType.PageChange, default, ReadOnlyMemory<byte>.Empty);
-        await using var pool = new BufferPool(store, 1, leaveOpen: true, new WalPageFlushGuard(wal));
+        var wal = await sql_storage_engine.Exposures.Logging.WriteAheadLogExposure.OpenAsync(device);
+        var record = await wal.AppendAsync(new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, WalRecordType.PageChange, default, ReadOnlyMemory<byte>.Empty);
+        await using sql_storage_engine.Exposures.Buffers.BufferPoolExposure pool = new sql_storage_engine.Exposures.Buffers.BufferPoolExposure(store, 1, leaveOpen: true, wal);
         var id = await store.AllocateAsync(PageType.Heap);
-        using (var pin = await pool.GetPageAsync(id)) pin.MarkDirty(record.Lsn);
+        using (var pin = await pool.GetPageAsync(id))
+            pin.MarkDirty(record.Lsn);
         device.FailFlush = true;
         await ((Func<Task>)(async () => await pool.FlushPageAsync(id))).Should().ThrowAsync<IOException>();
         store.Writes.Should().Be(0);
@@ -49,10 +54,13 @@ public sealed class WalPageFlushGuardTests
         var order = new List<string>();
         await using var store = new OrderedStore(order);
         var device = new OrderedWalDevice(order);
-        var wal = await WriteAheadLog.OpenAsync(device);
-        await using var pool = new BufferPool(store, 1, leaveOpen: true, new WalPageFlushGuard(wal));
+        var wal = await sql_storage_engine.Exposures.Logging.WriteAheadLogExposure.OpenAsync(device);
+        await using sql_storage_engine.Exposures.Buffers.BufferPoolExposure pool = new sql_storage_engine.Exposures.Buffers.BufferPoolExposure(store, 1, leaveOpen: true, wal);
         var id = await store.AllocateAsync(PageType.Heap);
-        using (await pool.GetPageAsync(id)) { }
+        using (await pool.GetPageAsync(id))
+        {
+        }
+
         await pool.FlushPageAsync(id);
         order.Should().NotContain("wal-flush");
     }
@@ -66,18 +74,28 @@ public sealed class WalPageFlushGuardTests
         }
     }
 
-    private sealed class OrderedStore(List<string> order) : IPageStore, IPageAllocator
+    private sealed class OrderedStore(List<string> order) : sql_storage_engine.Exposures.Pages.IPageStoreExposure, sql_storage_engine.Exposures.Pages.IPageAllocatorExposure
     {
-        private readonly InMemoryPageStore _inner = new();
+        private readonly sql_storage_engine.Exposures.Pages.MemoryPageStoreExposure _inner = new();
         public int Writes { get; private set; }
-        public int PageSize => _inner.PageSize;
+
+        public int GetPageSize() => _inner.GetPageSize();
         public ValueTask<PageId> AllocateAsync(PageType type, CancellationToken token = default) => _inner.AllocateAsync(type, token);
         public ValueTask FreeAsync(PageId id, CancellationToken token = default) => _inner.FreeAsync(id, token);
         public ValueTask ReadAsync(PageId id, Memory<byte> bytes, CancellationToken token = default) => _inner.ReadAsync(id, bytes, token);
         public async ValueTask WriteAsync(PageId id, ReadOnlyMemory<byte> bytes, CancellationToken token = default)
-        { order.Add("page-write"); Writes++; await _inner.WriteAsync(id, bytes, token); }
+        {
+            order.Add("page-write");
+            Writes++;
+            await _inner.WriteAsync(id, bytes, token);
+        }
+
         public async ValueTask FlushAsync(CancellationToken token = default)
-        { order.Add("page-flush"); await _inner.FlushAsync(token); }
+        {
+            order.Add("page-flush");
+            await _inner.FlushAsync(token);
+        }
+
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 }

@@ -1,8 +1,15 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
+using sql_storage_engine.Models.Exceptions;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Models;
+using sql_storage_engine.Models.Rows;
+using sql_storage_engine.Exposures.Transactions;
+using sql_storage_engine.Exposures.Rows;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExplicitTransactionBoundaryTests
 {
     [TestCase(0L, false)]
@@ -11,8 +18,11 @@ public sealed class ExplicitTransactionBoundaryTests
     [TestCase(864000000001L, false)]
     public void TimeoutHasExactTickBoundaries(long ticks, bool valid)
     {
-        Action create = () => _ = new StorageTransactionOptions(TimeSpan.FromTicks(ticks));
-        if (valid) create.Should().NotThrow(); else create.Should().Throw<ArgumentOutOfRangeException>();
+        Action create = () => _ = StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromTicks(ticks));
+        if (valid)
+            create.Should().NotThrow();
+        else
+            create.Should().Throw<StorageModelValidationException>().Which.InnerException.Should().BeOfType<ArgumentOutOfRangeException>();
     }
 
     [Test]
@@ -21,9 +31,9 @@ public sealed class ExplicitTransactionBoundaryTests
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
         await database.Engine.FlushAsync();
         var size = new FileInfo(database.Path).Length;
-        Func<Task> begin = async () => await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(5), maximumJournalBytes: size - 1));
+        Func<Task> begin = async () => await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(5), maximumJournalBytes: size - 1));
         await begin.Should().ThrowAsync<InvalidOperationException>();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(5), maximumJournalBytes: size));
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(5), maximumJournalBytes: size));
         (await transaction.RollbackAsync()).State.Should().Be(StorageTransactionState.Aborted);
     }
 
@@ -31,7 +41,7 @@ public sealed class ExplicitTransactionBoundaryTests
     public async Task ReturningWithAnOpenStreamClosesItAndAllowsRootResolution()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(5)));
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(5)));
         IAsyncEnumerator<StoredRow>? stream = null;
         await transaction.ExecuteStatementAsync(async (context, token) =>
         {
@@ -48,14 +58,12 @@ public sealed class ExplicitTransactionBoundaryTests
     public async Task EngineDisposalRollsBackRootAndSecondOpenCannotRecoverLiveJournal()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(5)));
-        await transaction.ExecuteStatementAsync(async (context, token) =>
-            await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First,
-                new RowUpdate([new ColumnUpdate(1, SqlValue.Integer(75))]), token));
-        Func<Task> open = async () => await StorageEngine.OpenAsync(database.Path);
+        var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(5)));
+        await transaction.ExecuteStatementAsync(async (context, token) => await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First, RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 1, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(75) }]), token));
+        Func<Task> open = async () => await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(database.Path);
         await open.Should().ThrowAsync<IOException>();
         await database.ReopenAsync();
-        (await database.Engine.ResolveTransactionAsync(transaction.Identity)).State.Should().Be(StorageTransactionState.Aborted);
+        (await database.Engine.ResolveTransactionAsync(transaction.ReadIdentity())).State.Should().Be(StorageTransactionState.Aborted);
         (await database.BalancesAsync()).Should().Equal(100, 100);
         await transaction.DisposeAsync();
     }

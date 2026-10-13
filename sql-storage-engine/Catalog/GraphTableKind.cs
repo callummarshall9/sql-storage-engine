@@ -1,5 +1,7 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine.Catalog;
-
 /// <summary>Identifies the durable role of a graph table.</summary>
 public enum GraphTableKind : byte
 {

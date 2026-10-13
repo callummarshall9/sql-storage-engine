@@ -3,7 +3,8 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <RootNamespace>sql_storage_engine</RootNamespace>
-        <ImplicitUsings>enable</ImplicitUsings>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <cCoderCodeAnalysisArchitecturePath>$(MSBuildProjectDirectory)/obj/project.stxjson</cCoderCodeAnalysisArchitecturePath>
         <Nullable>enable</Nullable>
         <PackageId>SqlStorageEngine</PackageId>
         <Version>1.16.0</Version>
@@ -12,14 +13,19 @@
         <PackageTags>sql;storage-engine;database;wal;b-plus-tree;graph</PackageTags>
         <RepositoryUrl>https://github.com/callummarshall9/sql-storage-engine</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-        <PackageReadmeFile>quickstart.md</PackageReadmeFile>
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     </PropertyGroup>
 
     <ItemGroup>
-        <None Include="..\quickstart.md" Pack="true" PackagePath="/" />
+        <PackageReference Include="cCoder.CodeAnalysis" Version="2026.10.8.1211" PrivateAssets="all" />
+        <PackageReference Include="cCoder.CodeAnalysis.Contracts" Version="2026.10.8.1211" />
+        <PackageReference Include="System.IO.Hashing" Version="10.0.12" />
+        <PackageReference Include="System.Reactive" Version="7.0.0" />
+    </ItemGroup>
+
+    <ItemGroup>
         <InternalsVisibleTo Include="sql-storage-engine.UnitTests" />
         <InternalsVisibleTo Include="TransactionCrashProbe" />
     </ItemGroup>

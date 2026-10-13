@@ -1,3 +1,8 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine.Security;
-
-public enum StorageDatabasePermissionAction { ManagePrincipals }
+public enum StorageDatabasePermissionAction
+{
+    ManagePrincipals
+}

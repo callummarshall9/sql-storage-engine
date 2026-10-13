@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using sql_storage_engine.Pages;
 using sql_storage_engine.Storage;
+using sql_storage_engine.Exposures.Pages;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class PageChecksumCompatibilityTests
 {
     // Golden IEEE CRC-32 values independently generated using Python zlib.crc32.
@@ -16,15 +16,15 @@ public sealed class PageChecksumCompatibilityTests
     {
         var page = Enumerable.Range(0, size).Select(i => (byte)((i * 37 + 11) % 256)).ToArray();
         // An existing stored checksum is excluded from validation and overwritten on write.
-        BinaryPrimitives.WriteUInt32LittleEndian(page.AsSpan(PageHeaderCodec.ChecksumOffset), expected);
-        Assert.DoesNotThrow(() => PageChecksum.ValidateChecksum(page, size));
-        PageChecksum.WriteChecksum(page, size);
-        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(page.AsSpan(PageHeaderCodec.ChecksumOffset)), Is.EqualTo(expected));
-        Assert.DoesNotThrow(() => PageChecksum.ValidateChecksum(page, size));
+        BinaryPrimitives.WriteUInt32LittleEndian(page.AsSpan(sql_storage_engine.Models.Pages.PageHeaderFormat.ChecksumOffset), expected);
+        Assert.DoesNotThrow(() => PageChecksumExposure.ValidateChecksum(page, size));
+        PageChecksumExposure.WriteChecksum(page, size);
+        Assert.That(BinaryPrimitives.ReadUInt32LittleEndian(page.AsSpan(sql_storage_engine.Models.Pages.PageHeaderFormat.ChecksumOffset)), Is.EqualTo(expected));
+        Assert.DoesNotThrow(() => PageChecksumExposure.ValidateChecksum(page, size));
         page[^1] ^= 0x80;
-        Assert.Throws<StorageCorruptionException>(() => PageChecksum.ValidateChecksum(page, size));
+        Assert.Throws<StorageCorruptionException>(() => PageChecksumExposure.ValidateChecksum(page, size));
         page[^1] ^= 0x80;
-        page[PageHeaderCodec.ChecksumOffset] ^= 1;
-        Assert.Throws<StorageCorruptionException>(() => PageChecksum.ValidateChecksum(page, size));
+        page[sql_storage_engine.Models.Pages.PageHeaderFormat.ChecksumOffset] ^= 1;
+        Assert.Throws<StorageCorruptionException>(() => PageChecksumExposure.ValidateChecksum(page, size));
     }
 }

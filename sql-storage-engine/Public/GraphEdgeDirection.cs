@@ -1,5 +1,7 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine;
-
 /// <summary>Selects graph edges by endpoint direction.</summary>
 public enum GraphEdgeDirection : byte
 {

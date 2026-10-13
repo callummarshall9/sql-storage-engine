@@ -1,36 +1,42 @@
 using System.Diagnostics;
 using AwesomeAssertions;
+using sql_storage_engine.Models;
+using sql_storage_engine.Exposures.Transactions;
+
+using sql_storage_engine.Models.Transactions;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class SavepointResourceTests
 {
     [Test]
     public async Task ExactCountAndAggregateImageQuotasRejectBeforeChangingTheRoot()
     {
         await using var db = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using (var transaction = await db.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30))))
+        await using (var transaction = await db.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30))))
         {
             var timer = Stopwatch.StartNew();
-            var first = await transaction.CreateSavepointAsync("point");
-            for (var i = 1; i < StorageSavepoint.MaximumCount; i++) await transaction.CreateSavepointAsync("point");
-            Func<Task> over = async () => await transaction.CreateSavepointAsync("one-over");
+            var first = await transaction.CreateStorageSavepointAsync("point");
+            for (var i = 1; i < StorageSavepoint.MaximumCount; i++)
+                await transaction.CreateStorageSavepointAsync("point");
+            Func<Task> over = async () => await transaction.CreateStorageSavepointAsync("one-over");
             await over.Should().ThrowAsync<InvalidOperationException>();
             var bytes = Directory.GetFiles(Path.GetDirectoryName(db.Path)!, "*.savepoint-*").Sum(path => new FileInfo(path).Length);
             TestContext.Out.WriteLine($"savepoints=32; retainedBytes={bytes}; elapsedMilliseconds={timer.Elapsed.TotalMilliseconds:F3}; no timing gate");
             await transaction.RollbackToSavepointAsync(first);
-            await transaction.CreateSavepointAsync("capacity-recovered");
+            await transaction.CreateStorageSavepointAsync("capacity-recovered");
             await transaction.CommitAsync();
         }
+
         var exact = new FileInfo(db.Path).Length + 64;
-        await using (var transaction = await db.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30), maximumJournalBytes: exact)))
+        await using (var transaction = await db.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30), maximumJournalBytes: exact)))
         {
-            await transaction.CreateSavepointAsync("exact");
-            Func<Task> over = async () => await transaction.CreateSavepointAsync("one-over");
+            await transaction.CreateStorageSavepointAsync("exact");
+            Func<Task> over = async () => await transaction.CreateStorageSavepointAsync("one-over");
             await over.Should().ThrowAsync<InvalidOperationException>();
-            transaction.State.Should().Be(StorageTransactionState.Committable);
+            transaction.ReadState().Should().Be(StorageTransactionState.Committable);
             await transaction.CommitAsync();
         }
+
         Directory.GetFiles(Path.GetDirectoryName(db.Path)!, "*.savepoint-*").Should().BeEmpty();
     }
 
@@ -38,11 +44,11 @@ public sealed class SavepointResourceTests
     public async Task ReentrantAndOverlappingOperationsRejectAndPrecancelledCallsKeepTheRoot()
     {
         await using var db = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await db.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)));
-        var point = await transaction.CreateSavepointAsync("point");
+        await using var transaction = await db.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)));
+        var point = await transaction.CreateStorageSavepointAsync("point");
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        Func<Task> create = async () => await transaction.CreateSavepointAsync("cancelled", cancelled.Token);
+        Func<Task> create = async () => await transaction.CreateStorageSavepointAsync("cancelled", cancelled.Token);
         await create.Should().ThrowAsync<OperationCanceledException>();
         Func<Task> rollback = async () => await transaction.RollbackToSavepointAsync(point, cancelled.Token);
         await rollback.Should().ThrowAsync<OperationCanceledException>();
@@ -50,7 +56,7 @@ public sealed class SavepointResourceTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pending = transaction.ExecuteStatementAsync(async (_, token) =>
         {
-            Func<Task> nested = async () => await transaction.CreateSavepointAsync("nested");
+            Func<Task> nested = async () => await transaction.CreateStorageSavepointAsync("nested");
             await nested.Should().ThrowAsync<InvalidOperationException>();
             entered.SetResult();
             await release.Task.WaitAsync(token);
@@ -61,8 +67,13 @@ public sealed class SavepointResourceTests
             Func<Task> overlap = async () => await transaction.RollbackToSavepointAsync(point);
             await overlap.Should().ThrowAsync<InvalidOperationException>();
         }
-        finally { release.SetResult(); await pending; }
-        transaction.State.Should().Be(StorageTransactionState.Committable);
+        finally
+        {
+            release.SetResult();
+            await pending;
+        }
+
+        transaction.ReadState().Should().Be(StorageTransactionState.Committable);
         await transaction.CommitAsync();
     }
 }

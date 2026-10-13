@@ -1,9 +1,8 @@
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Pages;
 
 namespace sql_storage_engine.UnitTests;
-
-internal sealed class CountingPageStore(IPageStore inner, bool leaveOpen = true) : IPageStore
+internal sealed class CountingPageStore(sql_storage_engine.Exposures.Pages.IPageStoreExposure inner, bool leaveOpen = true) : sql_storage_engine.Exposures.Pages.IPageStoreExposure
 {
     private int _reads;
     private int _writes;
@@ -11,8 +10,8 @@ internal sealed class CountingPageStore(IPageStore inner, bool leaveOpen = true)
     public int Reads => Volatile.Read(ref _reads);
     public int Writes => Volatile.Read(ref _writes);
     public int Flushes => Volatile.Read(ref _flushes);
-    public int PageSize => inner.PageSize;
 
+    public int GetPageSize() => inner.GetPageSize();
     public async ValueTask ReadAsync(PageId id, Memory<byte> destination, CancellationToken token = default)
     {
         Interlocked.Increment(ref _reads);

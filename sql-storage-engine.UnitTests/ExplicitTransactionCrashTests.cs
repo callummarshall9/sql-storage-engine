@@ -1,9 +1,14 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using System.Diagnostics;
 using System.Text.Json;
 using AwesomeAssertions;
+using sql_storage_engine.Models;
+using sql_storage_engine.Models.Security;
+using sql_storage_engine.Exposures.Security;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExplicitTransactionCrashTests
 {
     [TestCase("security-event-before-publish")]
@@ -23,34 +28,50 @@ public sealed class ExplicitTransactionCrashTests
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
         await database.Engine.DisposeAsync();
         var probe = TestBuildPaths.Probe("TransactionCrashProbe");
-        var start = new ProcessStartInfo("dotnet") { RedirectStandardError = true, RedirectStandardOutput = true };
-        start.ArgumentList.Add(probe); start.ArgumentList.Add(database.Path); start.ArgumentList.Add(phase);
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true
+        };
+        start.ArgumentList.Add(probe);
+        start.ArgumentList.Add(database.Path);
+        start.ArgumentList.Add(phase);
         using var child = Process.Start(start)!;
-        try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20)); }
-        finally { if (!child.HasExited) child.Kill(true); }
+        try
+        {
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+        }
+        finally
+        {
+            if (!child.HasExited)
+                child.Kill(true);
+        }
+
         child.ExitCode.Should().Be(42, await child.StandardError.ReadToEndAsync());
         var identity = JsonSerializer.Deserialize<StorageTransactionIdentity>(await File.ReadAllTextAsync(database.Path + ".probe-identity"));
         await database.ReopenAsync();
         var expected = phase is "committed" or "savepoint-committed" or "security-committed" or "lifecycle-committed" ? StorageTransactionState.Committed : StorageTransactionState.Aborted;
         (await database.Engine.ResolveTransactionAsync(identity)).State.Should().Be(expected);
-        database.Engine.Catalog.Tables.Any(table => table.Name == "crash_created").Should().Be(phase is "committed" or "savepoint-committed" or "security-committed" or "lifecycle-committed");
+        database.Engine.ReadCatalog().ReadTables().Any(table => table.Name == "crash_created").Should().Be(phase is "committed" or "savepoint-committed" or "security-committed" or "lifecycle-committed");
         (await database.BalancesAsync()).Should().Equal(100, 100);
         Directory.GetFiles(Path.GetDirectoryName(database.Path)!, "*.savepoint-*").Should().BeEmpty();
-        database.Engine.Catalog.Tables.Any(table => table.Name == "savepoint_later").Should().BeFalse();
+        database.Engine.ReadCatalog().ReadTables().Any(table => table.Name == "savepoint_later").Should().BeFalse();
         if (phase.StartsWith("lifecycle", StringComparison.Ordinal))
         {
-            var snapshot = await database.Engine.Security.ReadAsync();
+            var snapshot = await database.Engine.ReadSecurity().ReadAsync();
             snapshot.RetiredPrincipals.Count.Should().Be(phase == "lifecycle-committed" ? 1 : 0);
             snapshot.Principals.Count.Should().Be(phase == "lifecycle-committed" ? 1 : 0);
             snapshot.MutationAudit.Count.Should().Be(phase == "lifecycle-committed" ? 4 : 0);
             snapshot.MutationAudit.Count(a => a.PrincipalOperation == Security.StoragePrincipalOperation.Retire).Should().Be(phase == "lifecycle-committed" ? 1 : 0);
         }
+
         if (phase.StartsWith("security", StringComparison.Ordinal))
         {
-            (await database.Engine.Security.ReadAsync()).Principals.Count.Should().Be(phase == "security-committed" ? 1 : 0);
-            (await database.Engine.Security.ReadAsync()).MutationAudit.Count.Should().Be(phase == "security-committed" ? 1 : 0);
-            (await database.Engine.Security.ReadEventsAsync()).Count.Should().Be(phase == "security-event-before-publish" ? 0 : 1);
+            (await database.Engine.ReadSecurity().ReadAsync()).Principals.Count.Should().Be(phase == "security-committed" ? 1 : 0);
+            (await database.Engine.ReadSecurity().ReadAsync()).MutationAudit.Count.Should().Be(phase == "security-committed" ? 1 : 0);
+            (await database.Engine.ReadSecurity().ReadEventsAsync()).Count.Should().Be(phase == "security-event-before-publish" ? 0 : 1);
         }
+
         File.Exists(database.Path + ".statement-undo").Should().BeFalse();
         File.Exists(database.Path + ".transaction-undo").Should().BeFalse();
     }

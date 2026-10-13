@@ -1,15 +1,24 @@
+using sql_storage_engine.Models.Overflow;
+using sql_storage_engine.Models.Diagnostics;
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using System.Buffers.Binary;
 using System.Text;
 using AwesomeAssertions;
 using sql_storage_engine.Catalog;
 using sql_storage_engine.Diagnostics;
-using sql_storage_engine.Identifiers;
-using sql_storage_engine.Overflow;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Rows;
 using sql_storage_engine.Storage;
+using sql_storage_engine.Models;
+using sql_storage_engine.Models.Rows;
+using sql_storage_engine.Exposures.Rows;
+using sql_storage_engine.Models.Indexes;
+using sql_storage_engine.Models.Catalog;
+using sql_storage_engine.Exposures.Catalog;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class SqlServerFidelityTests
 {
     private const string RootSchema = """
@@ -22,54 +31,32 @@ public sealed class SqlServerFidelityTests
           <xs:element name="other" type="xs:int" />
         </xs:schema>
         """;
-
     [Test]
     public void CodePagesFixedPaddingAndTemporalAssignmentFollowDeclaredFacets()
     {
-        var japanese = SqlType.VarChar(10, "Japanese_CI_AS");
-        var schema = new TableDefinition([
-            new ColumnDefinition(new ColumnId(1), "jp", japanese, false),
-            new ColumnDefinition(new ColumnId(2), "c", SqlType.Char(4), false),
-            new ColumnDefinition(new ColumnId(3), "b", SqlType.Binary(4), false),
-            new ColumnDefinition(new ColumnId(4), "t", SqlType.Time(3), false),
-            new ColumnDefinition(new ColumnId(5), "dt", SqlType.DateTime, false)
-        ]);
-        var row = new Row([SqlValue.Text("日本"), SqlValue.Text("ab"), SqlValue.Binary([1, 2]),
-            SqlValue.Time(new TimeOnly(12, 0).Add(TimeSpan.FromTicks(9_999))),
-            SqlValue.DateTime(new DateTime(2026, 1, 1).AddMilliseconds(2))]);
-
-        var actual = RowCodec.Decode(RowCodec.Encode(row, schema), schema);
-
-        actual.Values[0].Should().Be(SqlValue.Text("日本"));
-        actual.Values[1].Should().Be(SqlValue.Text("ab  "));
-        actual.Values[2].Should().Be(SqlValue.Binary([1, 2, 0, 0]));
+        var japanese = sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateVarCharSqlType(10,"Japanese_CI_AS");
+        var schema = sql_storage_engine.Exposures.Rows.TableDefinitionExposure.CreateTableDefinition([sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"jp",japanese,false), sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 },"c",sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateCharSqlType(4),false), sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 3 },"b",sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateBinarySqlType(4),false), sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 4 },"t",sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateTimeSqlType(3),false), sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 5 },"dt",sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeDateTime(),false)]);
+        var row = RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("日本"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("ab"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([1, 2]), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTimeSqlValue(new TimeOnly(12, 0).Add(TimeSpan.FromTicks(9_999))), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateDateTimeSqlValue(new DateTime(2026, 1, 1).AddMilliseconds(2))]);
+        var actual = sql_storage_engine.Exposures.Rows.RowCodecExposure.Decode(sql_storage_engine.Exposures.Rows.RowCodecExposure.Encode(row,schema),schema);
+        actual.Values[0].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("日本"));
+        actual.Values[1].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("ab  "));
+        actual.Values[2].Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([1, 2, 0, 0]));
         ((TimeSqlValue)actual.Values[3]).Value.Ticks.Should().Be(TimeSpan.FromHours(12).Ticks + 10_000);
         ((DateTimeSqlValue)actual.Values[4]).Value.TimeOfDay.Ticks.Should().Be(33_333);
-        ((Action)(() => new ColumnDefinition(new ColumnId(1), "v", SqlType.VarChar(20), false)
-            .Validate(SqlValue.Text("🌍")))).Should().Throw<ArgumentException>();
-        new ColumnDefinition(new ColumnId(1), "v", SqlType.VarChar(20, "Latin1_General_100_CI_AS_UTF8"), false)
-            .Validate(SqlValue.Text("🌍"));
-
-        Key(SqlType.Decimal(10, 2), SqlValue.Decimal(1.005m)).Should().Be(
-            Key(SqlType.Decimal(10, 2), SqlValue.Decimal(1.01m)));
-        Key(SqlType.Binary(4), SqlValue.Binary([1, 2])).Should().Be(
-            Key(SqlType.Binary(4), SqlValue.Binary([1, 2, 0, 0])));
-        Key(SqlType.DateTime, SqlValue.DateTime(new DateTime(2026, 1, 1).AddMilliseconds(2))).Should().Be(
-            Key(SqlType.DateTime, SqlValue.DateTime(new DateTime(2026, 1, 1).AddTicks(33_333))));
+        ((Action)(() => sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CheckColumnDefinitionValue(columnDefinition: sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"v",sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateVarCharSqlType(20),false),sqlValue: sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("🌍")))).Should().Throw<ArgumentException>();
+        sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CheckColumnDefinitionValue(columnDefinition: sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"v",sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateVarCharSqlType(20,"Latin1_General_100_CI_AS_UTF8"),false),sqlValue: sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("🌍"));
+        Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateDecimalSqlType(10,2),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateDecimalSqlValue(1.005m)).Should().Be(Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateDecimalSqlType(10,2),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateDecimalSqlValue(1.01m)));
+        Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateBinarySqlType(4),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([1, 2])).Should().Be(Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateBinarySqlType(4),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([1, 2, 0, 0])));
+        Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeDateTime(),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateDateTimeSqlValue(new DateTime(2026, 1, 1).AddMilliseconds(2))).Should().Be(Key(sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeDateTime(),sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateDateTimeSqlValue(new DateTime(2026, 1, 1).AddTicks(33_333))));
     }
 
     [Test]
     public void NativeJsonAndXmlUseVersionedBinaryPayloadsAndRoundTrip()
     {
-        var schema = new TableDefinition([
-            new ColumnDefinition(new ColumnId(1), "j", SqlType.Json, false),
-            new ColumnDefinition(new ColumnId(2), "x", SqlType.Xml, false)
-        ]);
-        var row = new Row([SqlValue.Text("{\"a\":[1,true] }"), SqlValue.Text("<root>value</root>")]);
-
-        var encoded = RowCodec.Encode(row, schema);
-        var decoded = RowCodec.Decode(encoded, schema);
-
+        var schema = sql_storage_engine.Exposures.Rows.TableDefinitionExposure.CreateTableDefinition([sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"j",sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeJson(),false), sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 },"x",sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeXml(),false)]);
+        var row = RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("{\"a\":[1,true] }"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("<root>value</root>")]);
+        var encoded = sql_storage_engine.Exposures.Rows.RowCodecExposure.Encode(row,schema);
+        var decoded = sql_storage_engine.Exposures.Rows.RowCodecExposure.Decode(encoded,schema);
         ((TextSqlValue)decoded.Values[0]).Value.Should().Be("{\"a\":[1,true]}");
         decoded.Values[1].Should().Be(row.Values[1]);
         var variableTableOffset = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(12)));
@@ -86,113 +73,106 @@ public sealed class SqlServerFidelityTests
         try
         {
             RowId firstId;
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (var engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                var table = await engine.CreateTableAsync("versions", [
-                    new CatalogColumn(new ColumnId(1), "value", SqlType.Int, false),
-                    new CatalogColumn(new ColumnId(2), "rv", SqlType.RowVersion, false)
-                ]);
+                var table = await engine.CreateCatalogTableAsync("versions", [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "value", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "rv", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeRowVersion(), false)]);
                 var storage = await engine.OpenTableAsync(table.Id);
-                firstId = await storage.InsertAsync(new Row([SqlValue.Integer(1), SqlValue.Null]));
+                firstId = await storage.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1), sql_storage_engine.Exposures.Rows.SqlValueExposure.ReadNullSqlValue()]));
                 var first = await storage.GetAsync(firstId);
                 ReadRowVersion(first!.Row).Should().Be(1);
-                await storage.UpdateAsync(firstId, new RowUpdate([new ColumnUpdate(0, SqlValue.Integer(2))]));
+                await storage.UpdateAsync(firstId, RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 0, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2) }]));
                 ReadRowVersion((await storage.GetAsync(firstId))!.Row).Should().Be(2);
             }
-            await using (var reopened = await StorageEngine.OpenAsync(path))
+
+            await using (var reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path))
             {
-                var table = reopened.Catalog.Tables.Single(); var storage = await reopened.OpenTableAsync(table.Id);
-                var next = await storage.InsertAsync(new Row([SqlValue.Integer(3), SqlValue.Binary(new byte[8])]));
+                var table = reopened.ReadCatalog().ReadTables().Single();
+                var storage = await reopened.OpenTableAsync(table.Id);
+                var next = await storage.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(3), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue(new byte[8])]));
                 ReadRowVersion((await storage.GetAsync(next))!.Row).Should().Be(3);
             }
-            ((Func<CatalogTable>)(() => new CatalogTable(new TableId(1), "bad", 1, new PageId(1), [
-                new CatalogColumn(new ColumnId(1), "a", SqlType.RowVersion, false),
-                new CatalogColumn(new ColumnId(2), "b", SqlType.Timestamp, false)
-            ]))).Should().Throw<ArgumentException>();
+
+            ((Func<CatalogTable>)(() => sql_storage_engine.Exposures.Catalog.CatalogTableExposure.CreateCatalogTable(new sql_storage_engine.Models.Identifiers.TableId { Value = 1 }, "bad", 1, new sql_storage_engine.Models.Identifiers.PageId { Value = 1 }, [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "a", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeRowVersion(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "b", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeTimestamp(), false)]))).Should().Throw<ArgumentException>();
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
     public async Task XmlCollectionsAssembliesAndCompleteTableTypeMetadataPersist()
     {
         var path = Path.Combine(Path.GetTempPath(), $"catalog-fidelity-{Guid.NewGuid():N}.db");
-        var collection = new SqlXmlSchemaCollection("dbo", "Schemas", RootSchema);
+        var collection = sql_storage_engine.Exposures.Rows.SqlXmlSchemaCollectionExposure.CreateSqlXmlSchemaCollection("dbo","Schemas",RootSchema);
         try
         {
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (var engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                await engine.CreateXmlSchemaCollectionAsync(collection);
-                await engine.CreateAssemblyAsync(new CatalogAssembly("Types", [1, 2, 3], "1.2.3.4", "neutral",
-                    "0011223344556677"));
-                var native = SqlType.ClrUserDefined("dbo", "NativePoint", "Types", "Types.NativePoint",
-                    SqlClrSerializationFormat.Native, isByteOrdered: true, isFixedLength: true,
-                    validationMethodName: "Validate");
-                await engine.CreateScalarTypeAsync(native);
-                await engine.CreateTableTypeAsync("dbo", "Batch", [
-                    new CatalogColumn(new ColumnId(1), "id", SqlType.Int, false, identity: new CatalogIdentity(10, 5)),
-                    new CatalogColumn(new ColumnId(2), "guid", SqlType.UniqueIdentifier, false,
-                        defaultExpression: "newid()", isRowGuidCol: true),
-                    new CatalogColumn(new ColumnId(3), "document", SqlType.TypedXml(collection), true),
-                    new CatalogColumn(new ColumnId(4), "calculated", SqlType.Int, true,
-                        computedExpression: "id + 1", isComputedPersisted: true)
-                ], [new CatalogTableTypeIndex("IX_Batch", false, true,
-                    [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First)],
-                    CatalogIndexStorageKind.NonClustered, [new ColumnId(2)], ignoreDuplicateKey: true)],
-                    [new CatalogCheckConstraint("CK_Batch", "id > 0")], isMemoryOptimized: false);
+                await engine.CreateSqlXmlSchemaCollectionAsync(collection);
+                await engine.CreateCatalogAssemblyAsync(sql_storage_engine.Exposures.Catalog.CatalogAssemblyExposure.CreateCatalogAssembly("Types",[1, 2, 3],"1.2.3.4","neutral","0011223344556677"));
+                var native = sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateClrUserDefinedSqlType("dbo","NativePoint","Types","Types.NativePoint",SqlClrSerializationFormat.Native,isByteOrdered: true,isFixedLength: true,validationMethodName: "Validate");
+                await engine.CreateCatalogScalarTypeAsync(native);
+                await engine.CreateCatalogTableTypeAsync("dbo", "Batch", [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "id", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false, catalogIdentity: sql_storage_engine.Exposures.Catalog.CatalogIdentityExposure.CreateCatalogIdentity(10,5)), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "guid", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeUniqueIdentifier(), false, defaultExpression: "newid()", isRowGuidCol: true), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 3 }, "document", sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateTypedXmlSqlType(collection), true), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 4 }, "calculated", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), true, computedExpression: "id + 1", isComputedPersisted: true)], [sql_storage_engine.Exposures.Catalog.CatalogTableTypeIndexExposure.CreateCatalogTableTypeIndex("IX_Batch", false, true, [sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.First)], CatalogIndexStorageKind.NonClustered, [new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }], ignoreDuplicateKey: true)], [sql_storage_engine.Exposures.Catalog.CatalogCheckConstraintExposure.CreateCatalogCheckConstraint("CK_Batch","id > 0")], isMemoryOptimized: false);
                 await engine.AlterXmlSchemaCollectionAsync("dbo", "Schemas", [OtherSchema]);
             }
 
-            await using var reopened = await StorageEngine.OpenAsync(path);
-            reopened.Catalog.XmlSchemaCollections.Single().Definitions.Should().HaveCount(2);
-            reopened.Catalog.Assemblies.Single().Image.ToArray().Should().Equal(1, 2, 3);
-            reopened.Catalog.ScalarTypes.Single().Definition.ClrMaxByteSize.Should().BeNull();
-            var tableType = reopened.Catalog.TableTypes.Single();
+            await using var reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path);
+            sql_storage_engine.Exposures.Rows.SqlXmlSchemaCollectionExposure.ReadSqlXmlSchemaCollectionDefinitions(reopened.ReadCatalog().ReadXmlSchemaCollections().Single()).Should().HaveCount(2);
+            sql_storage_engine.Exposures.Catalog.CatalogAssemblyExposure.ReadCatalogAssemblyImage(reopened.ReadCatalog().ReadAssemblies().Single()).ToArray().Should().Equal(1, 2, 3);
+            reopened.ReadCatalog().ReadScalarTypes().Single().Definition.ClrMaxByteSize.Should().BeNull();
+            var tableType = reopened.ReadCatalog().ReadTableTypes().Single();
             tableType.IsMemoryOptimized.Should().BeFalse();
-            tableType.Columns[0].Identity.Should().Be(new CatalogIdentity(10, 5));
+            tableType.Columns[0].Identity.Should().Be(sql_storage_engine.Exposures.Catalog.CatalogIdentityExposure.CreateCatalogIdentity(10,5));
             tableType.Columns[1].IsRowGuidCol.Should().BeTrue();
             tableType.Columns[3].IsComputedPersisted.Should().BeTrue();
             tableType.CheckConstraints.Should().ContainSingle();
-            tableType.Indexes.Single().IncludedColumns.Should().Equal(new ColumnId(2));
-            await ((Func<Task>)(async () => await reopened.DropXmlSchemaCollectionAsync("dbo", "Schemas")))
-                .Should().ThrowAsync<CatalogConflictException>();
+            tableType.Indexes.Single().IncludedColumns.Should().Equal(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 });
+            await ((Func<Task>)(async () => await reopened.DropXmlSchemaCollectionAsync("dbo", "Schemas"))).Should().ThrowAsync<CatalogConflictException>();
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
     public void ClrRuntimeHierarchySpatialVectorCursorAndTableValuesAreCallable()
     {
-        var clr = SqlType.ClrUserDefined("dbo", "PositiveByte", "Types", "Types.PositiveByte",
-            SqlClrSerializationFormat.Native, validationMethodName: "Validate");
-        SqlClrRuntime.Register("Types", "Types.PositiveByte", new PositiveByteRuntime());
+        var clr = sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateClrUserDefinedSqlType("dbo","PositiveByte","Types","Types.PositiveByte",SqlClrSerializationFormat.Native,validationMethodName: "Validate");
+        sql_storage_engine.Exposures.Rows.SqlClrRuntimeExposure.Register("Types","Types.PositiveByte",new PositiveByteRuntime());
         try
         {
-            SqlClrRuntime.Parse(clr, "7").Should().Be(SqlValue.Binary([7]));
-            new ColumnDefinition(new ColumnId(1), "v", clr, false).Validate(SqlValue.Binary([7]));
-            ((Action)(() => new ColumnDefinition(new ColumnId(1), "v", clr, false)
-                .Validate(SqlValue.Binary([0])))).Should().Throw<ArgumentException>();
-            ((Func<SqlType>)(() => SqlType.ClrUserDefined("dbo", "Bad", "Types", "Bad",
-                SqlClrSerializationFormat.Native, 8))).Should().Throw<ArgumentException>();
+            sql_storage_engine.Exposures.Rows.SqlClrRuntimeExposure.Parse(clr,"7").Should().Be(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([7]));
+            sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CheckColumnDefinitionValue(columnDefinition: sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"v",clr,false),sqlValue: sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([7]));
+            ((Action)(() => sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CheckColumnDefinitionValue(columnDefinition: sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"v",clr,false),sqlValue: sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateBinarySqlValue([0])))).Should().Throw<ArgumentException>();
+            ((Func<SqlType>)(() => sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateClrUserDefinedSqlType("dbo","Bad","Types","Bad",SqlClrSerializationFormat.Native,8))).Should().Throw<ArgumentException>();
         }
-        finally { SqlClrRuntime.Unregister("Types", "Types.PositiveByte"); }
+        finally
+        {
+            sql_storage_engine.Exposures.Rows.SqlClrRuntimeExposure.Unregister("Types","Types.PositiveByte");
+        }
 
-        var parent = SqlHierarchyId.Parse("/1/"); var child = SqlHierarchyId.Parse("/1/2/");
-        child.IsDescendantOf(parent).Should().BeTrue();
-        child.GetAncestor(1).Should().Be(parent);
-        parent.GetDescendant(null, null).Should().Be(SqlHierarchyId.Parse("/1/1/"));
-        var london = new SqlSpatial(SqlSpatialKind.Geography, 4326, "POINT (-0.1276 51.5072)");
-        var paris = new SqlSpatial(SqlSpatialKind.Geography, 4326, "POINT (2.3522 48.8566)");
-        london.STDistance(paris).Should().BeInRange(340_000, 350_000);
-        var vector = (VectorSqlValue)SqlValue.Vector([1f, 0f]);
-        vector.DistanceTo((VectorSqlValue)SqlValue.Vector([0f, 1f])).Should().BeApproximately(1, 0.000001);
-
-        var definition = new TableDefinition([new ColumnDefinition(new ColumnId(1), "id", SqlType.Int, false)]);
-        var table = (TableSqlValue)SqlValue.Table(definition, [new Row([SqlValue.Integer(1)])]);
+        var parent = sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.ParseSqlHierarchyId("/1/");
+        var child = sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.ParseSqlHierarchyId("/1/2/");
+        sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.CheckSqlHierarchyIdDescendant([child, parent]).Should().BeTrue();
+        sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.ReadSqlHierarchyIdAncestor(sqlHierarchyId: child,1).Should().Be(parent);
+        sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.CreateSqlHierarchyIdDescendant([parent, null, null]).Should().Be(sql_storage_engine.Exposures.Rows.SqlHierarchyIdExposure.ParseSqlHierarchyId("/1/1/"));
+        var london = sql_storage_engine.Exposures.Spatial.SqlSpatialExposure.CreateSqlSpatial(kind: SqlSpatialKind.Geography,srid: 4326,wellKnownText: "POINT (-0.1276 51.5072)");
+        var paris = sql_storage_engine.Exposures.Spatial.SqlSpatialExposure.CreateSqlSpatial(kind: SqlSpatialKind.Geography,srid: 4326,wellKnownText: "POINT (2.3522 48.8566)");
+        sql_storage_engine.Exposures.Spatial.SqlSpatialExposure.MeasureSqlSpatialDistance(sqlSpatials: [london, paris]).Should().BeInRange(340_000, 350_000);
+        var vector = (VectorSqlValue)sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([1f, 0f]);
+        sql_storage_engine.Exposures.Rows.SqlValueExposure.MeasureVectorSqlValueDistance(vectorSqlValues: [vector, (VectorSqlValue)sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([0f, 1f])]).Should().BeApproximately(1, 0.000001);
+        var definition = sql_storage_engine.Exposures.Rows.TableDefinitionExposure.CreateTableDefinition([sql_storage_engine.Exposures.Rows.ColumnDefinitionExposure.CreateColumnDefinition(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },"id",sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(),false)]);
+        var table = (TableSqlValue)sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTableSqlValue(definition,[RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)])]);
         table.Rows.Should().ContainSingle();
-        var cursor = (CursorSqlValue)SqlValue.Cursor(table.Rows);
-        cursor = cursor.FetchNext(out var fetched); fetched.Should().Be(table.Rows[0]);
-        cursor.FetchNext(out fetched); fetched.Should().BeNull();
+        var cursor = (CursorSqlValue)sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateCursorSqlValue(table.Rows);
+        cursor = sql_storage_engine.Exposures.Rows.CursorSqlValueExposure.FetchCursorSqlValue(cursor,"Next",0,out var fetched);
+        fetched.Should().Be(table.Rows[0]);
+        sql_storage_engine.Exposures.Rows.CursorSqlValueExposure.FetchCursorSqlValue(cursor,"Next",0,out fetched);
+        fetched.Should().BeNull();
     }
 
     [Test]
@@ -201,74 +181,58 @@ public sealed class SqlServerFidelityTests
         var path = Path.Combine(Path.GetTempPath(), $"special-index-{Guid.NewGuid():N}.db");
         try
         {
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (var engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                var table = await engine.CreateTableAsync("searchable", [
-                    new CatalogColumn(new ColumnId(1), "json", SqlType.Json, false),
-                    new CatalogColumn(new ColumnId(2), "point", SqlType.Geometry, false),
-                    new CatalogColumn(new ColumnId(3), "embedding", SqlType.Vector(3), false),
-                    new CatalogColumn(new ColumnId(4), "overflow", SqlType.NVarCharMax(), false),
-                    new CatalogColumn(new ColumnId(5), "id", SqlType.Int, false)
-                ]);
-                var row = new Row([SqlValue.Text("{\"customer\":{\"id\":42}}"), SqlValue.Geometry("POINT (1 2)"),
-                    SqlValue.Vector([1f, 2f, 3f]), SqlValue.Text(new string('x', 2_000)), SqlValue.Integer(1)]);
-                var storage = await engine.OpenTableAsync(table.Id); var rowId = await storage.InsertAsync(row);
-                await storage.InsertAsync(new Row([SqlValue.Text("{\"customer\":{\"id\":99}}"),
-                    SqlValue.Geometry("POINT (20 20)"), SqlValue.Vector([9f, 9f, 9f]),
-                    SqlValue.Text(new string('y', 2_000)), SqlValue.Integer(2)]));
+                var table = await engine.CreateCatalogTableAsync("searchable", [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "json", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeJson(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 }, "point", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeGeometry(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 3 }, "embedding", sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateVectorSqlType(3), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 4 }, "overflow", sql_storage_engine.Exposures.Rows.SqlTypeExposure.CreateNVarCharMaxSqlType(), false), sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 5 }, "id", sql_storage_engine.Exposures.Rows.SqlTypeExposure.ReadSqlTypeInt(), false)]);
+                var row = RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("{\"customer\":{\"id\":42}}"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateGeometrySqlValue("POINT (1 2)"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([1f, 2f, 3f]), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue(new string ('x', 2_000)), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1)]);
+                var storage = await engine.OpenTableAsync(table.Id);
+                var rowId = await storage.InsertAsync(row);
+                await storage.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("{\"customer\":{\"id\":99}}"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateGeometrySqlValue("POINT (20 20)"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([9f, 9f, 9f]), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue(new string ('y', 2_000)), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2)]));
                 for (var id = 3; id <= 100; id++)
-                    await storage.InsertAsync(new Row([SqlValue.Text($"{{\"customer\":{{\"id\":{id + 1_000}}}}}"),
-                        SqlValue.Geometry($"POINT ({id} {id})"), SqlValue.Vector([(float)id, id, id]),
-                        SqlValue.Text("seed"), SqlValue.Integer(id)]));
-                await engine.CreateIndexAsync("searchable_pk", table.Id, true,
-                    [new CatalogIndexedColumn(new ColumnId(5), SortDirection.Ascending, NullSortOrder.First)],
-                    new CatalogBTreeIndexOptions(CatalogIndexStorageKind.Clustered, isPrimaryKey: true));
-                var json = await engine.CreateSpecializedIndexAsync("json_idx", table.Id,
-                    new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First),
-                    CatalogSpecializedIndexOptions.Json("$.customer.id"));
-                var spatial = await engine.CreateSpecializedIndexAsync("spatial_idx", table.Id,
-                    new CatalogIndexedColumn(new ColumnId(2), SortDirection.Ascending, NullSortOrder.First),
-                    CatalogSpecializedIndexOptions.Spatial());
-                var vector = await engine.CreateSpecializedIndexAsync("vector_idx", table.Id,
-                    new CatalogIndexedColumn(new ColumnId(3), SortDirection.Ascending, NullSortOrder.First),
-                    CatalogSpecializedIndexOptions.Vector());
+                    await storage.InsertAsync(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue($"{{\"customer\":{{\"id\":{id + 1_000}}}}}"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateGeometrySqlValue($"POINT ({id} {id})"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([(float)id, id, id]), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("seed"), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(id)]));
+                await engine.CreateCatalogIndexAsync("searchable_pk", table.Id, true, [sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 5 },SortDirection.Ascending,NullSortOrder.First)], sql_storage_engine.Exposures.Catalog.CatalogBTreeIndexOptionsExposure.CreateCatalogBTreeIndexOptions(CatalogIndexStorageKind.Clustered,isPrimaryKey: true));
+                var json = await engine.CreateSpecializedCatalogIndexAsync("json_idx", table.Id, sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.First), sql_storage_engine.Exposures.Catalog.CatalogSpecializedIndexOptionsExposure.CreateJsonCatalogSpecializedIndexOptions("$.customer.id"));
+                var spatial = await engine.CreateSpecializedCatalogIndexAsync("spatial_idx", table.Id, sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 2 },SortDirection.Ascending,NullSortOrder.First), sql_storage_engine.Exposures.Catalog.CatalogSpecializedIndexOptionsExposure.CreateSpatialCatalogSpecializedIndexOptions());
+                var vector = await engine.CreateSpecializedCatalogIndexAsync("vector_idx", table.Id, sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 3 },SortDirection.Ascending,NullSortOrder.First), sql_storage_engine.Exposures.Catalog.CatalogSpecializedIndexOptionsExposure.CreateVectorCatalogSpecializedIndexOptions());
                 (await (await engine.OpenIndexAsync(json.Id)).FindAsync([row.Values[0]])).Should().Equal(rowId);
                 (await (await engine.OpenIndexAsync(spatial.Id)).FindAsync([row.Values[1]])).Should().Equal(rowId);
                 (await (await engine.OpenIndexAsync(vector.Id)).FindAsync([row.Values[2]])).Should().Equal(rowId);
-                var nearest = await (await engine.OpenIndexAsync(vector.Id)).SearchNearestAsync(
-                    SqlValue.Vector([1f, 2f, 3f]), 1);
+                var nearest = await (await engine.OpenIndexAsync(vector.Id)).SearchNearestAsync(sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateVectorSqlValue([1f, 2f, 3f]), 1);
                 nearest.Should().ContainSingle().Which.RowId.Should().Be(rowId);
             }
-            await using var reopened = await StorageEngine.OpenAsync(path);
-            reopened.Catalog.Indexes.Select(index => index.Method).Should().BeEquivalentTo(
-                [CatalogIndexMethod.BTree, CatalogIndexMethod.Json, CatalogIndexMethod.Spatial, CatalogIndexMethod.Vector]);
+
+            await using var reopened = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(path);
+            reopened.ReadCatalog().ReadIndexes().Select(index => index.Method).Should().BeEquivalentTo([CatalogIndexMethod.BTree, CatalogIndexMethod.Json, CatalogIndexMethod.Spatial, CatalogIndexMethod.Vector]);
         }
-        finally { if (File.Exists(path)) File.Delete(path); }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     [Test]
     public void LobLimitsCoverSqlServerMaxPayloads()
     {
-        OverflowReferenceCodec.MaximumValueLength.Should().Be(int.MaxValue);
+        OverflowReferenceFormat.MaximumValueLength.Should().Be(int.MaxValue);
         StorageLimits.MaximumValueBytes.Should().Be(int.MaxValue);
-        OverflowReferenceCodec.MaximumChainLength.Should().BeGreaterThan(500_000);
+        OverflowReferenceFormat.MaximumChainLength.Should().BeGreaterThan(500_000);
     }
 
-    private static ulong ReadRowVersion(Row row) => BinaryPrimitives.ReadUInt64BigEndian(
-        ((BinarySqlValue)row.Values[1]).Value.Span);
-
-    private static Indexes.IndexKey Key(SqlType type, SqlValue value)
+    private static ulong ReadRowVersion(Row row) => BinaryPrimitives.ReadUInt64BigEndian(sql_storage_engine.Exposures.Rows.SqlValueExposure.ReadBinarySqlValue(binarySqlValue: ((BinarySqlValue)row.Values[1])).Span);
+    private static sql_storage_engine.Models.Indexes.IndexKey Key(SqlType type, SqlValue value)
     {
-        var table = new CatalogTable(new TableId(1), "t", 1, new PageId(1),
-            [new CatalogColumn(new ColumnId(1), "v", type, false)]);
-        var index = new CatalogIndex(new IndexId(1), "i", table.Id, new PageId(2), false,
-            [new CatalogIndexedColumn(new ColumnId(1), SortDirection.Ascending, NullSortOrder.First)]);
-        return CatalogIndexKey.EncodeValues([value], table, index);
+        var table = sql_storage_engine.Exposures.Catalog.CatalogTableExposure.CreateCatalogTable(new sql_storage_engine.Models.Identifiers.TableId { Value = 1 }, "t", 1, new sql_storage_engine.Models.Identifiers.PageId { Value = 1 }, [sql_storage_engine.Exposures.Catalog.CatalogColumnExposure.CreateCatalogColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 }, "v", type, false)]);
+        var index = sql_storage_engine.Exposures.Catalog.CatalogIndexExposure.CreateCatalogIndex(indexId: new sql_storage_engine.Models.Identifiers.IndexId { Value = 1 },name: "i",tableId: table.Id,pageId: new sql_storage_engine.Models.Identifiers.PageId { Value = 2 },isUnique: false,columns: [sql_storage_engine.Exposures.Catalog.CatalogIndexedColumnExposure.CreateCatalogIndexedColumn(new sql_storage_engine.Models.Identifiers.ColumnId { Value = 1 },SortDirection.Ascending,NullSortOrder.First)]);
+        return sql_storage_engine.Exposures.Catalog.CatalogIndexKeyExposure.EncodeValues([value],table,index);
     }
 
     private sealed class PositiveByteRuntime : ISqlClrTypeRuntime
     {
-        public ReadOnlyMemory<byte> Parse(string text) => new[] { byte.Parse(text) };
+        public ReadOnlyMemory<byte> Parse(string text) => new[]
+        {
+            byte.Parse(text)
+        };
         public string Format(ReadOnlyMemory<byte> serializedValue) => serializedValue.Span[0].ToString();
         public bool Validate(ReadOnlyMemory<byte> serializedValue) => serializedValue.Length == 1 && serializedValue.Span[0] > 0;
         public int Compare(ReadOnlyMemory<byte> left, ReadOnlyMemory<byte> right) => left.Span[0].CompareTo(right.Span[0]);

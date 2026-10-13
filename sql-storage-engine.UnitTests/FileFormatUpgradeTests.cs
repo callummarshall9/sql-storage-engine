@@ -1,12 +1,19 @@
+using sql_storage_engine.Exposures.Backups;
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
+using sql_storage_engine.Models.Diagnostics;
 using System.Buffers.Binary;
 using AwesomeAssertions;
 using sql_storage_engine.Backup;
 using sql_storage_engine.Diagnostics;
+using sql_storage_engine.Exposures.Diagnostics;
 using sql_storage_engine.Pages;
 using sql_storage_engine.Storage;
+using sql_storage_engine.Exposures.Pages;
+using sql_storage_engine.Models.Pages;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class FileFormatUpgradeTests
 {
     [Test]
@@ -14,20 +21,18 @@ public sealed class FileFormatUpgradeTests
     {
         using var paths = new Paths();
         await CreateSourceAndBackup(paths);
-        MakeLegacy(paths.Database, 0);
-        var manager = new FileFormatUpgradeManager(new OfflineBackupManager());
-        await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database, paths.Backup,
-            afterBoundary: (_, _) => throw new SimulatedProcessTerminationException(CrashBoundary.PageWrite, 0))))
-            .Should().ThrowAsync<SimulatedProcessTerminationException>();
-
-        await manager.UpgradeAsync(paths.Database, paths.Backup, integrityCheck: async (path, token) =>
-        { await using var database = await PageDatabase.OpenAsync(path, DatabaseOpenMode.ReadOnly, token); return database.Header.FormatVersion == DatabaseHeader.CurrentFormatVersion; });
-
-        manager.CurrentProgress!.Status.Should().Be(UpgradeStatus.Complete);
-        manager.Activity.Should().Contain($"step:0-to-{DatabaseHeader.CurrentFormatVersion}")
-            .And.Contain($"complete:{DatabaseHeader.CurrentFormatVersion}");
-        await using var reopened = await PageDatabase.OpenAsync(paths.Database, DatabaseOpenMode.ReadOnly);
-        reopened.Header.FormatVersion.Should().Be(DatabaseHeader.CurrentFormatVersion);
+        MakeLegacy(paths.Database,0);
+        var manager = new FileFormatUpgradeExposure();
+        await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database,paths.Backup,afterBoundary: (_, _) => throw new SimulatedProcessTerminationException(new CrashTermination { Boundary = CrashBoundary.PageWrite, Ordinal = 0 })))).Should().ThrowAsync<SimulatedProcessTerminationException>();
+        await manager.UpgradeAsync(paths.Database,paths.Backup,integrityCheck: async (path, token) =>
+        {
+            await using sql_storage_engine.Exposures.Pages.PageDatabaseExposure database = await sql_storage_engine.Exposures.Pages.PageDatabaseExposure.OpenAsync(path,DatabaseOpenMode.ReadOnly,token);
+            return database.ReadHeader().FormatVersion == sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion;
+        });
+        manager.ReadCurrentProgress()!.Status.Should().Be(UpgradeStatus.Complete);
+        manager.ReadActivity().Should().Contain($"step:0-to-{sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion}").And.Contain($"complete:{sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion}");
+        await using sql_storage_engine.Exposures.Pages.PageDatabaseExposure reopened = await sql_storage_engine.Exposures.Pages.PageDatabaseExposure.OpenAsync(paths.Database,DatabaseOpenMode.ReadOnly);
+        reopened.ReadHeader().FormatVersion.Should().Be(sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion);
     }
 
     [TestCase((ushort)4, (ushort)3)]
@@ -35,10 +40,11 @@ public sealed class FileFormatUpgradeTests
     [TestCase((ushort)1, (ushort)2)]
     public async Task UnsupportedSourceAndDowngradeFailBeforeModification(ushort source, ushort target)
     {
-        using var paths = new Paths(); await CreateSourceAndBackup(paths); MakeLegacy(paths.Database, source);
+        using var paths = new Paths();
+        await CreateSourceAndBackup(paths);
+        MakeLegacy(paths.Database,source);
         var before = await File.ReadAllBytesAsync(paths.Database);
-        await ((Func<Task>)(async () => await new FileFormatUpgradeManager(new OfflineBackupManager())
-            .UpgradeAsync(paths.Database, paths.Backup, target))).Should().ThrowAsync<StorageException>();
+        await ((Func<Task>)(async () => await new FileFormatUpgradeExposure().UpgradeAsync(paths.Database,paths.Backup,target))).Should().ThrowAsync<StorageException>();
         (await File.ReadAllBytesAsync(paths.Database)).Should().Equal(before);
         File.Exists(paths.Database + ".upgrade.json").Should().BeFalse();
     }
@@ -46,22 +52,44 @@ public sealed class FileFormatUpgradeTests
     [Test]
     public async Task FailedPostUpgradeIntegrityPreventsCompletion()
     {
-        using var paths = new Paths(); await CreateSourceAndBackup(paths); MakeLegacy(paths.Database, 0);
-        var manager = new FileFormatUpgradeManager(new OfflineBackupManager());
-        await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database, paths.Backup,
-            integrityCheck: (_, _) => Task.FromResult(false)))).Should().ThrowAsync<StorageCorruptionException>();
-        manager.CurrentProgress!.Status.Should().Be(UpgradeStatus.Failed);
-        manager.Activity.Should().Contain("integrity:failed");
+        using var paths = new Paths();
+        await CreateSourceAndBackup(paths);
+        MakeLegacy(paths.Database,0);
+        var manager = new FileFormatUpgradeExposure();
+        await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database, paths.Backup, integrityCheck: (_, _) => Task.FromResult(false)))).Should().ThrowAsync<StorageCorruptionException>();
+        manager.ReadCurrentProgress()!.Status.Should().Be(UpgradeStatus.Failed);
+        manager.ReadActivity().Should().Contain("integrity:failed");
     }
 
     private static async Task CreateSourceAndBackup(Paths paths)
-    { await using (var database = await PageDatabase.CreateAsync(paths.Database)) { } await new OfflineBackupManager().CreateAsync(paths.Database, [], paths.Backup); }
+    {
+        await using (sql_storage_engine.Exposures.Pages.PageDatabaseExposure database = await sql_storage_engine.Exposures.Pages.PageDatabaseExposure.CreatePageDatabaseExposureAsync(paths.Database))
+        {
+        }
+
+        await new OfflineBackupExposure().CreateBackupManifestAsync(paths.Database,[],paths.Backup);
+    }
+
     private static void MakeLegacy(string path, ushort version)
-    { var bytes = File.ReadAllBytes(path); BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(DatabaseHeaderCodec.PayloadOffset + 24), version); PageChecksum.WriteChecksum(bytes.AsSpan(0, PageConstants.DefaultSize), PageConstants.DefaultSize); File.WriteAllBytes(path, bytes); }
+    {
+        var bytes = File.ReadAllBytes(path);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(sql_storage_engine.Models.Pages.DatabaseHeaderFormat.PayloadOffset + 24), version);
+        PageChecksumExposure.WriteChecksum(bytes.AsSpan(0, sql_storage_engine.Models.Pages.PageConstants.DefaultSize), sql_storage_engine.Models.Pages.PageConstants.DefaultSize);
+        File.WriteAllBytes(path, bytes);
+    }
+
     private sealed class Paths : IDisposable
     {
-        public Paths() { Root = Path.Combine(Path.GetTempPath(), "sql-upgrade-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Root); }
-        public string Root { get; } public string Database => Path.Combine(Root, "source.db"); public string Backup => Path.Combine(Root, "backup");
+        public Paths()
+        {
+            Root = Path.Combine(Path.GetTempPath(), "sql-upgrade-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Root);
+        }
+
+        public string Root { get; }
+        public string Database => Path.Combine(Root, "source.db");
+        public string Backup => Path.Combine(Root, "backup");
+
         public void Dispose() => Directory.Delete(Root, true);
     }
 }

@@ -1,8 +1,14 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Models.Rows;
+using sql_storage_engine.Models;
+using sql_storage_engine.Exposures.Transactions;
+using sql_storage_engine.Exposures.Rows;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExplicitTransactionConcurrencyTests
 {
     [TestCase(true)]
@@ -10,13 +16,14 @@ public sealed class ExplicitTransactionConcurrencyTests
     public async Task RootReaderWaitsForEntireTransaction(bool commit)
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)));
-        await transaction.ExecuteStatementAsync(async (context, token) =>
-            await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First,
-                new RowUpdate([new ColumnUpdate(1, SqlValue.Integer(75))]), token));
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)));
+        await transaction.ExecuteStatementAsync(async (context, token) => await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First, RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 1, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(75) }]), token));
         var reader = database.BalancesAsync();
         reader.IsCompleted.Should().BeFalse();
-        if (commit) await transaction.CommitAsync(); else await transaction.RollbackAsync();
+        if (commit)
+            await transaction.CommitAsync();
+        else
+            await transaction.RollbackAsync();
         (await reader.WaitAsync(TimeSpan.FromSeconds(5))).Should().Equal(commit ? [75L, 100L] : [100L, 100L]);
     }
 
@@ -24,9 +31,9 @@ public sealed class ExplicitTransactionConcurrencyTests
     public async Task IdleDeadlineRollsBackAndReleasesWaitingAcquisition()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromMilliseconds(200)));
-        await using var next = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(5))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
-        transaction.State.Should().Be(StorageTransactionState.Aborted);
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromMilliseconds(200)));
+        await using var next = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(5))).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        transaction.ReadState().Should().Be(StorageTransactionState.Aborted);
         await next.RollbackAsync();
     }
 
@@ -34,20 +41,25 @@ public sealed class ExplicitTransactionConcurrencyTests
     public async Task ConcurrentOperationRejectsAndCancelledWaitDoesNotReleaseOwner()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)));
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)));
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var statement = transaction.ExecuteStatementAsync(async (_, _) => { entered.SetResult(); await release.Task; }).AsTask();
+        var statement = transaction.ExecuteStatementAsync(async (_, _) =>
+        {
+            entered.SetResult();
+            await release.Task;
+        }).AsTask();
         await entered.Task;
         Func<Task> commit = async () => await transaction.CommitAsync();
         await commit.Should().ThrowAsync<InvalidOperationException>();
         using var cancel = new CancellationTokenSource();
-        var waiting = database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)), cancel.Token).AsTask();
+        var waiting = database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)), cancel.Token).AsTask();
         cancel.Cancel();
         Func<Task> acquire = async () => await waiting;
         await acquire.Should().ThrowAsync<OperationCanceledException>();
-        release.SetResult(); await statement;
-        transaction.State.Should().Be(StorageTransactionState.Committable);
+        release.SetResult();
+        await statement;
+        transaction.ReadState().Should().Be(StorageTransactionState.Committable);
         await transaction.RollbackAsync();
     }
 }

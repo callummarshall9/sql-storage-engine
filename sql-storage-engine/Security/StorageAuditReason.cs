@@ -1,3 +1,13 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine.Security;
-
-public enum StorageAuditReason { None, PermissionDenied, MissingPrincipal, StaleRevision, StaleObject, AuditUnavailable }
+public enum StorageAuditReason
+{
+    None,
+    PermissionDenied,
+    MissingPrincipal,
+    StaleRevision,
+    StaleObject,
+    AuditUnavailable
+}

@@ -1,44 +1,45 @@
+using sql_storage_engine.Exposures.Logging;
 using AwesomeAssertions;
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Logging;
 using sql_storage_engine.Transactions;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class DurableTransactionTests
 {
     [Test]
     public async Task CommitReturnsOnlyAfterCommitRecordIsFlushed()
     {
         var device = new WriteAheadLogTests.MemoryWalDevice();
-        var wal = await WriteAheadLog.OpenAsync(device);
-        var transaction = new DurableTransaction(new TransactionId(1), wal);
+        var wal = await sql_storage_engine.Exposures.Logging.WriteAheadLogExposure.OpenAsync(device);
+        var transaction = wal.CreateWriteAheadLogExposureTransaction(new TransactionId { Value = 1 });
         await transaction.AppendChangeAsync(new byte[] { 1 });
         await transaction.CommitAsync();
-        transaction.State.Should().Be(TransactionState.Committed);
-        wal.DurableLsn.Value.Should().BeGreaterThan(0);
-        WalFormat.ReadRecords(device.Bytes).Records[^1].Type.Should().Be(WalRecordType.Commit);
+        transaction.ReadTransactionState().Should().Be(TransactionState.Committed);
+        wal.ReadDurableLsn().Value.Should().BeGreaterThan(0);
+        WalReadResultExposure.ReadWalReadResult(device.Bytes).Records[^1].Type.Should().Be(WalRecordType.Commit);
     }
 
     [Test]
     public async Task FlushFailureDoesNotReportSuccessfulCommitOrAllowMutation()
     {
-        var device = new WriteAheadLogTests.MemoryWalDevice { FailFlush = true };
-        var transaction = new DurableTransaction(new TransactionId(1), await WriteAheadLog.OpenAsync(device));
+        var device = new WriteAheadLogTests.MemoryWalDevice
+        {
+            FailFlush = true
+        };
+        var transaction = (await WriteAheadLogExposure.OpenAsync(device)).CreateWriteAheadLogExposureTransaction(new TransactionId { Value = 1 });
         await ((Func<Task>)(async () => await transaction.CommitAsync())).Should().ThrowAsync<IOException>();
-        transaction.State.Should().Be(TransactionState.Failed);
-        await ((Func<Task>)(async () => await transaction.AppendChangeAsync(new byte[] { 1 }))).Should()
-            .ThrowAsync<InvalidOperationException>();
+        transaction.ReadTransactionState().Should().Be(TransactionState.Failed);
+        await ((Func<Task>)(async () => await transaction.AppendChangeAsync(new byte[] { 1 }))).Should().ThrowAsync<InvalidOperationException>();
     }
 
     [Test]
     public async Task LostClientResponseAfterFlushLeavesTransactionDurablyCommitted()
     {
         var device = new WriteAheadLogTests.MemoryWalDevice();
-        var transaction = new DurableTransaction(new TransactionId(1), await WriteAheadLog.OpenAsync(device));
-        await ((Func<Task>)(async () => await transaction.CommitAsync(
-            () => ValueTask.FromException(new IOException("response lost"))))).Should().ThrowAsync<IOException>();
-        transaction.State.Should().Be(TransactionState.Committed);
-        WalFormat.ReadRecords(device.Bytes).Records.Single().Type.Should().Be(WalRecordType.Commit);
+        var transaction = (await WriteAheadLogExposure.OpenAsync(device)).CreateWriteAheadLogExposureTransaction(new TransactionId { Value = 1 });
+        await ((Func<Task>)(async () => await transaction.CommitAsync(() => ValueTask.FromException(new IOException("response lost"))))).Should().ThrowAsync<IOException>();
+        transaction.ReadTransactionState().Should().Be(TransactionState.Committed);
+        WalReadResultExposure.ReadWalReadResult(device.Bytes).Records.Single().Type.Should().Be(WalRecordType.Commit);
     }
 }

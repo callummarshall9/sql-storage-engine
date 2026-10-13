@@ -1,11 +1,18 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
+using sql_storage_engine.Exposures.Diagnostics;
+using sql_storage_engine.Exposures.Logging;
 using AwesomeAssertions;
 using sql_storage_engine.Diagnostics;
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Logging;
 using sql_storage_engine.Pages;
+using sql_storage_engine.Models.Logging;
+using sql_storage_engine.Exposures.Pages;
+using sql_storage_engine.Models.Pages;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class PartialWriteHarnessTests
 {
     [TestCase(PartialWritePattern.Prefix)]
@@ -14,40 +21,40 @@ public sealed class PartialWriteHarnessTests
     [TestCase(PartialWritePattern.Random)]
     public void TornPagesFailChecksumAndVerifiedImageReconstructsThem(PartialWritePattern pattern)
     {
-        var oldPage = Page(1, 0x11); var newPage = Page(1, 0x22);
-        var torn = PartialWriteHarness.Tear(oldPage, newPage, pattern);
-        ((Action)(() => PageChecksum.ValidateChecksum(torn, torn.Length))).Should().Throw<Exception>();
-        PartialWriteHarness.RecoverPage(torn, newPage).Should().Equal(newPage);
+        var oldPage = Page(1,0x11);
+        var newPage = Page(1,0x22);
+        var torn = PartialWriteExposure.Tear(oldPage,newPage,pattern);
+        ((Action)(() => PageChecksumExposure.ValidateChecksum(torn,torn.Length))).Should().Throw<Exception>();
+        WriteDamageExposure.RecoverPage(torn,newPage).Should().Equal(newPage);
     }
 
     [Test]
     public void CorruptPageWithoutVerifiedSourceHasSpecificError()
     {
-        var corrupt = Page(1, 1); corrupt[^1] ^= 1;
-        var badSource = Page(1, 2); badSource[^2] ^= 1;
-        ((Func<byte[]>)(() => PartialWriteHarness.RecoverPage(corrupt, badSource)))
-            .Should().Throw<UnrecoverablePageCorruptionException>();
+        var corrupt = Page(1,1);
+        corrupt[^1] ^= 1;
+        var badSource = Page(1,2);
+        badSource[^2] ^= 1;
+        ((Func<byte[]>)(() => WriteDamageExposure.RecoverPage(corrupt,badSource))).Should().Throw<UnrecoverablePageCorruptionException>();
     }
 
     [Test]
     public void TornWalTailAndMidLogCorruptionUseDistinctPolicies()
     {
-        var first = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(1), default,
-            new TransactionId(1), WalRecordType.Commit, ReadOnlyMemory<byte>.Empty));
-        var second = WalFormat.WriteRecord(new WalRecord(new LogSequenceNumber(41), default,
-            new TransactionId(2), WalRecordType.Commit, ReadOnlyMemory<byte>.Empty));
+        var first = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 1 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Commit, Payload = ReadOnlyMemory<byte>.Empty });
+        var second = WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 41 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 2 }, Type = WalRecordType.Commit, Payload = ReadOnlyMemory<byte>.Empty });
         var complete = first.Concat(second).ToArray();
-        PartialWriteHarness.ClassifyWal(complete[..^3]).Should().Be(WalDamagePolicy.TruncateIncompleteTail);
+        WriteDamageExposure.ClassifyWal(complete[..^3]).Should().Be(WalDamagePolicy.TruncateIncompleteTail);
         complete[10] ^= 1;
-        PartialWriteHarness.ClassifyWal(complete).Should().Be(WalDamagePolicy.StopForCorruption);
+        WriteDamageExposure.ClassifyWal(complete).Should().Be(WalDamagePolicy.StopForCorruption);
     }
 
     private static byte[] Page(ulong id, byte value)
     {
-        var page = new byte[PageConstants.DefaultSize];
-        page.AsSpan(PageHeaderCodec.EncodedLength).Fill(value);
-        PageHeaderCodec.Write(page, new PageHeader(new PageId(id), PageType.Heap, PageFormatVersion.Current,
-            default, PageChecksumAlgorithm.Crc32, 0));
-        PageChecksum.WriteChecksum(page, page.Length); return page;
+        var page = new byte[sql_storage_engine.Models.Pages.PageConstants.DefaultSize];
+        page.AsSpan(sql_storage_engine.Models.Pages.PageHeaderFormat.EncodedLength).Fill(value);
+        sql_storage_engine.Exposures.Pages.PageHeaderExposure.WritePageHeader(page,new PageHeader { PageId = new sql_storage_engine.Models.Identifiers.PageId { Value = id }, PageType = PageType.Heap, FormatVersion = new sql_storage_engine.Models.Pages.PageFormatVersion { Value = sql_storage_engine.Models.Pages.PageHeaderFormat.CurrentVersion }, PageLogSequenceNumber = default, ChecksumAlgorithm = PageChecksumAlgorithm.Crc32, Checksum = 0 });
+        PageChecksumExposure.WriteChecksum(page,page.Length);
+        return page;
     }
 }

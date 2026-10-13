@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup>
+    <!-- cCoder.CodeAnalysis requires Roslyn 5.9; the .NET 10.0 SDK ships Roslyn 5.0. -->
+    <PackageReference Include="Microsoft.Net.Compilers.Toolset" Version="5.9.0" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

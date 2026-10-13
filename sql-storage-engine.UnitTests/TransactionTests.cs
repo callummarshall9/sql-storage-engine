@@ -2,7 +2,6 @@ using AwesomeAssertions;
 using sql_storage_engine.Transactions;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class TransactionTests
 {
     [Test]
@@ -10,13 +9,13 @@ public sealed class TransactionTests
     {
         var commits = 0;
         var rollbacks = 0;
-        var manager = new TransactionManager();
-        using var committed = manager.Begin(() => commits++, () => rollbacks++);
-        using var rolledBack = manager.Begin(() => commits++, () => rollbacks++);
+        sql_storage_engine.Exposures.Transactions.TransactionManagerExposure manager = new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure();
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure committed = new sql_storage_engine.Exposures.Transactions.TransactionExposure(manager.CreateTransactionLifecycle(() => commits++,() => rollbacks++));
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure rolledBack = new sql_storage_engine.Exposures.Transactions.TransactionExposure(manager.CreateTransactionLifecycle(() => commits++,() => rollbacks++));
         committed.Commit();
         rolledBack.Rollback();
-        committed.State.Should().Be(TransactionState.Committed);
-        rolledBack.State.Should().Be(TransactionState.RolledBack);
+        committed.ReadState().Should().Be(TransactionState.Committed);
+        rolledBack.ReadState().Should().Be(TransactionState.RolledBack);
         commits.Should().Be(1);
         rollbacks.Should().Be(1);
     }
@@ -25,24 +24,32 @@ public sealed class TransactionTests
     [TestCase(false)]
     public void TerminalOperation_CannotExecuteTwice(bool commit)
     {
-        using var transaction = new TransactionManager().Begin();
-        if (commit) transaction.Commit(); else transaction.Rollback();
-        ((Action)(() => { if (commit) transaction.Commit(); else transaction.Rollback(); })).Should()
-            .Throw<InvalidOperationException>();
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure transaction = new sql_storage_engine.Exposures.Transactions.TransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure().CreateTransactionLifecycle());
+        if (commit)
+            transaction.Commit();
+        else
+            transaction.Rollback();
+        ((Action)(() =>
+        {
+            if (commit)
+                transaction.Commit();
+            else
+                transaction.Rollback();
+        })).Should().Throw<InvalidOperationException>();
     }
 
     [Test]
     public void StorageOperation_RejectsEveryInactiveState()
     {
-        using var committed = new TransactionManager().Begin();
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure committed = new sql_storage_engine.Exposures.Transactions.TransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure().CreateTransactionLifecycle());
         committed.Commit();
         ((Action)committed.EnsureActive).Should().Throw<InvalidOperationException>();
-        using var rolledBack = new TransactionManager().Begin();
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure rolledBack = new sql_storage_engine.Exposures.Transactions.TransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure().CreateTransactionLifecycle());
         rolledBack.Rollback();
         ((Action)rolledBack.EnsureActive).Should().Throw<InvalidOperationException>();
-        using var failed = new TransactionManager().Begin(commit: () => throw new IOException("failure"));
+        using sql_storage_engine.Exposures.Transactions.TransactionExposure failed = new sql_storage_engine.Exposures.Transactions.TransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure().CreateTransactionLifecycle(commit: () => throw new IOException("failure")));
         ((Action)failed.Commit).Should().Throw<IOException>();
-        failed.State.Should().Be(TransactionState.Failed);
+        failed.ReadState().Should().Be(TransactionState.Failed);
         ((Action)failed.EnsureActive).Should().Throw<InvalidOperationException>();
     }
 
@@ -50,23 +57,27 @@ public sealed class TransactionTests
     public void DisposeActiveTransaction_InvokesRollbackExactlyOnce()
     {
         var rollbacks = 0;
-        var transaction = new TransactionManager().Begin(rollback: () => rollbacks++);
+        sql_storage_engine.Exposures.Transactions.TransactionExposure transaction = new sql_storage_engine.Exposures.Transactions.TransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure().CreateTransactionLifecycle(rollback: () => rollbacks++));
         transaction.Dispose();
         transaction.Dispose();
-        transaction.State.Should().Be(TransactionState.RolledBack);
+        transaction.ReadState().Should().Be(TransactionState.RolledBack);
         rollbacks.Should().Be(1);
     }
 
     [Test]
     public void ConcurrentBegin_AllocatesUniqueMonotonicIdsWithinIncarnation()
     {
-        var manager = new TransactionManager();
-        var transactions = Enumerable.Range(0, 1000).AsParallel().Select(_ => manager.Begin()).ToArray();
+        sql_storage_engine.Exposures.Transactions.TransactionManagerExposure manager = new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure();
+        var transactions = Enumerable.Range(0, 1000).AsParallel().Select(_ => new sql_storage_engine.Exposures.Transactions.TransactionExposure(manager.CreateTransactionLifecycle())).ToArray();
         try
         {
-            transactions.Select(transaction => transaction.Id.Value).Distinct().Should().HaveCount(1000);
-            transactions.Select(transaction => transaction.Id.Value).Order().Should().Equal(Enumerable.Range(1, 1000).Select(value => (ulong)value));
+            transactions.Select(transaction => transaction.ReadId().Value).Distinct().Should().HaveCount(1000);
+            transactions.Select(transaction => transaction.ReadId().Value).Order().Should().Equal(Enumerable.Range(1, 1000).Select(value => (ulong)value));
         }
-        finally { foreach (var transaction in transactions) transaction.Dispose(); }
+        finally
+        {
+            foreach (sql_storage_engine.Exposures.Transactions.TransactionExposure transaction in transactions)
+                transaction.Dispose();
+        }
     }
 }

@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine.Security;
-
-public enum StoragePrincipalDependencyKind { Membership, Ownership, Delegation }
+public enum StoragePrincipalDependencyKind
+{
+    Membership,
+    Ownership,
+    Delegation
+}

@@ -1,15 +1,19 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Models;
+using sql_storage_engine.Exposures.Transactions;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExplicitTransactionInterleavedReadTests
 {
     [Test]
     public async Task PausedScopedScanAllowsSequentialPointReadsWithoutAllowingConcurrentOperations()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        await using var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(10)));
+        await using var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(10)));
         await transaction.ExecuteStatementAsync(async (context, token) =>
         {
             var table = await context.OpenTableAsync(database.Table.Id, token);
@@ -21,6 +25,7 @@ public sealed class ExplicitTransactionInterleavedReadTests
                 (await index.FindAsync([row.Row.Values[0]], token)).Should().ContainSingle();
                 count++;
             }
+
             count.Should().Be(2);
         });
         (await transaction.CommitAsync()).State.Should().Be(StorageTransactionState.Committed);

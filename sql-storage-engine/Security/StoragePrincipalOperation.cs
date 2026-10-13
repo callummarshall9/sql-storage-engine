@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 namespace sql_storage_engine.Security;
-
-public enum StoragePrincipalOperation { Create, Deactivate, Retire }
+public enum StoragePrincipalOperation
+{
+    Create,
+    Deactivate,
+    Retire
+}

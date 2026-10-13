@@ -1,8 +1,14 @@
+// ---------------------------------------------------------------
+// Copyright (c) Callum Marshall
+// ---------------------------------------------------------------
 using AwesomeAssertions;
 using sql_storage_engine.Rows;
+using sql_storage_engine.Models;
+using sql_storage_engine.Models.Rows;
+using sql_storage_engine.Exposures.Transactions;
+using sql_storage_engine.Exposures.Rows;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ExplicitTransactionRecoveryTests
 {
     [TestCase("BeforeCommitDecision", StorageTransactionState.Aborted)]
@@ -11,11 +17,13 @@ public sealed class ExplicitTransactionRecoveryTests
     public async Task DecisionFaultResolvesFromDurableEvidence(string stage, StorageTransactionState expected)
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)));
-        await transaction.ExecuteStatementAsync(async (context, token) =>
-            await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First,
-                new RowUpdate([new ColumnUpdate(1, SqlValue.Integer(75))]), token));
-        database.Engine.TransactionObserver = current => { if (current == stage) throw new IOException("injected"); };
+        var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)));
+        await transaction.ExecuteStatementAsync(async (context, token) => await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First, RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 1, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(75) }]), token));
+        database.Engine.WriteTransactionObserver(observer: current =>
+        {
+            if (current == stage)
+                throw new IOException("injected");
+        });
         var result = await transaction.CommitAsync();
         result.State.Should().Be(stage == "BeforeCommitDecision" ? StorageTransactionState.Aborted : StorageTransactionState.Indeterminate);
         if (result.State == StorageTransactionState.Indeterminate)
@@ -25,7 +33,8 @@ public sealed class ExplicitTransactionRecoveryTests
             Func<Task> dispose = async () => await transaction.DisposeAsync();
             await dispose.Should().ThrowAsync<InvalidOperationException>();
         }
-        else await transaction.DisposeAsync();
+        else
+            await transaction.DisposeAsync();
         await database.ReopenAsync();
         (await database.Engine.ResolveTransactionAsync(result.Identity)).State.Should().Be(expected);
         (await database.BalancesAsync()).Should().Equal(expected == StorageTransactionState.Committed ? [75L, 100L] : [100L, 100L]);
@@ -35,11 +44,13 @@ public sealed class ExplicitTransactionRecoveryTests
     public async Task FailedRollbackQuarantinesUntilRecoveryAndReceiptCanBeReleased()
     {
         await using var database = await ExplicitTransactionTestDatabase.CreateAsync();
-        var transaction = await database.Engine.BeginTransactionAsync(new(TimeSpan.FromSeconds(30)));
-        await transaction.ExecuteStatementAsync(async (context, token) =>
-            await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First,
-                new RowUpdate([new ColumnUpdate(1, SqlValue.Integer(75))]), token));
-        database.Engine.TransactionObserver = stage => { if (stage == "BeforeRollback") throw new IOException("injected"); };
+        var transaction = await database.Engine.BeginTransactionAsync(StorageTransactionOptionsExposure.CreateStorageTransactionOptions(TimeSpan.FromSeconds(30)));
+        await transaction.ExecuteStatementAsync(async (context, token) => await (await context.OpenTableAsync(database.Table.Id, token)).UpdateAsync(database.First, RowUpdateExposure.CreateRowUpdate([new ColumnUpdate { ColumnIndex = 1, Value = sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(75) }]), token));
+        database.Engine.WriteTransactionObserver(observer: stage =>
+        {
+            if (stage == "BeforeRollback")
+                throw new IOException("injected");
+        });
         var result = await transaction.RollbackAsync();
         result.State.Should().Be(StorageTransactionState.Indeterminate);
         Func<Task> dispose = async () => await transaction.DisposeAsync();

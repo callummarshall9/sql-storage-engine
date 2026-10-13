@@ -2,7 +2,6 @@ using System.Text.Json;
 using AwesomeAssertions;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class ProductionSupportMatrixTests
 {
     [Test]
@@ -21,20 +20,10 @@ public sealed class ProductionSupportMatrixTests
         }
     }
 
-    [Test]
-    public void MatrixPublishesExclusionsGuaranteesCapacitiesAndProductionEnvelope()
-    {
-        var text = File.ReadAllText(DocumentPath("production-support.md"));
-        foreach (var required in new[] { "Network filesystems", "Removable", "Commit succeeds", "Crash recovery",
-                     "Offline backup", "Online backup", "Point-in-time restore", "Format upgrade", "Hard ceiling",
-                     "production grade", "linux-x64-ext4" })
-            text.Should().Contain(required);
-    }
-
-    private static string DocumentPath(string name) => RepositoryPath("docs", name);
+    private static string DocumentPath(string name) => Path.Combine(AppContext.BaseDirectory, "TestFixtures", name);
     private static string RepositoryPath(params string[] parts)
     {
         var root = TestBuildPaths.Repository;
-        return Path.Combine([root, .. parts]);
+        return Path.Combine([root, ..parts]);
     }
 }

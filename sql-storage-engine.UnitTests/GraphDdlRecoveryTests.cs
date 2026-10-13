@@ -1,7 +1,6 @@
-using sql_storage_engine.Identifiers;
+using sql_storage_engine.Models.Identifiers;
 
 namespace sql_storage_engine.UnitTests;
-
 public sealed class GraphDdlRecoveryTests
 {
     [TestCase(0)]
@@ -16,31 +15,33 @@ public sealed class GraphDdlRecoveryTests
         try
         {
             TableId nodeId = default;
-            await using (var engine = await StorageEngine.CreateAsync(path))
+            await using (var engine = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.CreateStorageSessionExposureAsync(path))
             {
-                await engine.ExecuteStatementAsync(async (statement, token) =>
-                    nodeId = (await statement.CreateGraphNodeTableAsync(GraphDdlTests.Name("nodes"), GraphDdlTests.Payload, token)).Id);
-                engine.GraphDdlObserver = stage =>
+                await engine.ExecuteStatementAsync(async (statement, token) => nodeId = (await statement.CreateCatalogTableGraphNodeAsync(GraphDdlTests.Name("nodes"),GraphDdlTests.Payload,token)).Id);
+                engine.WriteGraphDdlObserver(observer:stage =>
                 {
-                    if ((int)stage != boundary) return;
+                    if ((int)stage != boundary)
+                        return;
                     // Capture the persisted database and still-active before-image journal at this exact boundary.
                     File.Copy(path, crash);
                     File.Copy(path + ".statement-undo", crash + ".statement-undo");
                     throw new IOException("Simulated interruption after capturing the durable image.");
-                };
-                Assert.ThrowsAsync<IOException>(async () => await engine.ExecuteStatementAsync(async (statement, token) =>
-                    await statement.CreateGraphEdgeTableAsync(GraphDdlTests.Name("edges"), GraphDdlTests.Payload, nodeId, nodeId, token)));
+                });
+                Assert.ThrowsAsync<IOException>(async () => await engine.ExecuteStatementAsync(async (statement, token) => await statement.CreateCatalogTableGraphEdgeAsync(GraphDdlTests.Name("edges"),GraphDdlTests.Payload,new sql_storage_engine.Models.Graph.GraphTableEndpoints {FromNodeTableId=nodeId,ToNodeTableId=nodeId},token)));
             }
-            await using var recovered = await StorageEngine.OpenAsync(crash);
-            Assert.That(recovered.Catalog.TryGetTable("edges", out _), Is.False);
-            Assert.That(recovered.Catalog.TryGetTable(nodeId, out _), Is.True);
-            Assert.That(recovered.GraphCatalog.Indexes, Has.Count.EqualTo(1));
+
+            await using var recovered = await sql_storage_engine.Exposures.Storage.StorageSessionExposure.OpenStorageSessionExposureAsync(crash);
+            Assert.That(recovered.ReadCatalog().TryGetTable("edges", out _), Is.False);
+            Assert.That(recovered.ReadCatalog().TryGetTable(nodeId, out _), Is.True);
+            Assert.That(recovered.ReadCatalog().ReadIndexes(), Has.Count.EqualTo(1));
             Assert.That(File.Exists(crash + ".statement-undo"), Is.False);
-            await recovered.ExecuteStatementAsync(async (statement, token) =>
-                await statement.CreateGraphEdgeTableAsync(GraphDdlTests.Name("edges"), GraphDdlTests.Payload, nodeId, nodeId, token));
-            Assert.That(recovered.Catalog.TryGetTable("edges", out var edges), Is.True);
-            Assert.That(recovered.Catalog.GetIndexes(edges!.Id), Has.Count.EqualTo(3));
+            await recovered.ExecuteStatementAsync(async (statement, token) => await statement.CreateCatalogTableGraphEdgeAsync(GraphDdlTests.Name("edges"),GraphDdlTests.Payload,new sql_storage_engine.Models.Graph.GraphTableEndpoints {FromNodeTableId=nodeId,ToNodeTableId=nodeId},token));
+            Assert.That(recovered.ReadCatalog().TryGetTable("edges", out var edges), Is.True);
+            Assert.That(recovered.ReadCatalog().GetIndexes(edges!.Id), Has.Count.EqualTo(3));
         }
-        finally { GraphDdlTests.Delete(path); }
+        finally
+        {
+            GraphDdlTests.Delete(path);
+        }
     }
 }
