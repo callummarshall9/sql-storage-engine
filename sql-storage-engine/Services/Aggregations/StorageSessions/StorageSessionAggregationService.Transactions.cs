@@ -252,22 +252,16 @@ internal sealed partial class StorageSessionAggregationService
 
         try
         {
-            if (storagePublicTransactionContext.State == StorageTransactionState.Aborted)
+            if (storagePublicTransactionContext.State != StorageTransactionState.Aborted)
             {
-                return new StorageTransactionReceipt
+                if (storagePublicTransactionContext.State is not (StorageTransactionState.Committable or StorageTransactionState.Doomed))
                 {
-                    Identity = storagePublicTransactionContext.Identity,
-                    State = storagePublicTransactionContext.State
-                };
-            }
+                    throw new InvalidOperationException(message: "Transaction cannot roll back.");
+                }
 
-            if (storagePublicTransactionContext.State is not (StorageTransactionState.Committable or StorageTransactionState.Doomed))
-            {
-                throw new InvalidOperationException(message: "Transaction cannot roll back.");
-            }
-
-            await AbortPublicTransactionCoreAsync(storagePublicTransactionContext: storagePublicTransactionContext)
+                await AbortPublicTransactionCoreAsync(storagePublicTransactionContext: storagePublicTransactionContext)
             .ConfigureAwait(continueOnCapturedContext: false);
+            }
 
             return new StorageTransactionReceipt
             {

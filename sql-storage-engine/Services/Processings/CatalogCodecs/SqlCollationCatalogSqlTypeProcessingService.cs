@@ -8,7 +8,6 @@ using sql_storage_engine.Rows;
 namespace sql_storage_engine.Services.Processings.CatalogCodecs;
 internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISqlCollationCatalogSqlTypeProcessingService
 {
-    private readonly sql_storage_engine.Services.Foundations.SqlCollations.SqlCollationService collations;
     private readonly SqlType sqlTypeValueBit;
     private readonly SqlType sqlTypeValueTinyInt;
     private readonly SqlType sqlTypeValueSmallInt;
@@ -36,7 +35,6 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
     private readonly SqlType sqlTypeValueVarBinaryMax;
     public SqlCollationCatalogSqlTypeProcessingService(sql_storage_engine.Services.Foundations.SqlCollations.SqlCollationService sqlCollationService)
     {
-        collations = sqlCollationService;
         sqlTypeValueBit = new SqlType
         {
             Name = SqlTypeName.Bit
@@ -265,11 +263,11 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
             SqlTypeName.NVarChar when sqlType.IsMax => ExecuteNVarCharMaxSqlType(collation: sqlType.Collation),
             SqlTypeName.NVarChar => ExecuteNVarCharSqlType(length: sqlType.Length ?? throw ExecuteInvalidSqlType(), collation: sqlType.Collation),
             SqlTypeName.Binary => ExecuteBinarySqlType(length: sqlType.Length ?? throw ExecuteInvalidSqlType()),
-            SqlTypeName.VarBinary when sqlType.IsMax => ReadVarBinaryMaxSqlType(),
+            SqlTypeName.VarBinary when sqlType.IsMax => this.sqlTypeValueVarBinaryMax,
             SqlTypeName.VarBinary => ExecuteVarBinarySqlType(length: sqlType.Length ?? throw ExecuteInvalidSqlType()),
             SqlTypeName.Vector => ExecuteVectorSqlType(dimensions: sqlType.VectorDimensions ?? throw ExecuteInvalidSqlType(), baseType: sqlType.VectorBaseType ?? throw ExecuteInvalidSqlType()),
-            SqlTypeName.Text => sqlType.Collation is null ? ReadTextSqlType() : ExecuteTextWithCollationSqlType(collation: sqlType.Collation),
-            SqlTypeName.NText => sqlType.Collation is null ? ReadNTextSqlType() : ExecuteNTextWithCollationSqlType(collation: sqlType.Collation),
+            SqlTypeName.Text => sqlType.Collation is null ? this.sqlTypeValueText : ExecuteTextWithCollationSqlType(collation: sqlType.Collation),
+            SqlTypeName.NText => sqlType.Collation is null ? this.sqlTypeValueNText : ExecuteNTextWithCollationSqlType(collation: sqlType.Collation),
             SqlTypeName.Xml when sqlType.XmlSchemaCollection is not null && sqlType.XmlContentKind is not null => ExecuteTypedXmlSqlType(schemaCollection: sqlType.XmlSchemaCollection, contentKind: sqlType.XmlContentKind.Value),
             _ => ExecuteCanonicalSimpleSqlType(name: sqlType.Name)};
 
@@ -391,9 +389,6 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
         Length = ExecuteValidateLengthSqlType(length: length, maximum: 8_000)
     };
 
-    private SqlType ReadVarBinaryMaxSqlType() =>
-        sqlTypeValueVarBinaryMax;
-
     private SqlType ExecuteVarBinarySqlType(int length = 1) =>
         new SqlType
     {
@@ -421,14 +416,8 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
         };
     }
 
-    private SqlType ReadTextSqlType() =>
-        sqlTypeValueText;
-
     private SqlType ExecuteTextWithCollationSqlType(string collation) =>
         ExecuteCharacterSqlType(name: SqlTypeName.Text, length: null, isMax: true, collation: collation);
-
-    private SqlType ReadNTextSqlType() =>
-        sqlTypeValueNText;
 
     private SqlType ExecuteNTextWithCollationSqlType(string collation) =>
         ExecuteCharacterSqlType(name: SqlTypeName.NText, length: null, isMax: true, collation: collation);
@@ -454,29 +443,29 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
     private SqlType ExecuteCanonicalSimpleSqlType(SqlTypeName name) =>
         name switch
     {
-        SqlTypeName.Bit => ReadBitSqlType(),
-        SqlTypeName.TinyInt => ReadTinyIntSqlType(),
-        SqlTypeName.SmallInt => ReadSmallIntSqlType(),
-        SqlTypeName.Int => ReadIntSqlType(),
-        SqlTypeName.BigInt => ReadBigIntSqlType(),
-        SqlTypeName.SmallMoney => ReadSmallMoneySqlType(),
-        SqlTypeName.Money => ReadMoneySqlType(),
-        SqlTypeName.Real => ReadRealSqlType(),
-        SqlTypeName.Date => ReadDateSqlType(),
-        SqlTypeName.SmallDateTime => ReadSmallDateTimeSqlType(),
-        SqlTypeName.DateTime => ReadDateTimeSqlType(),
-        SqlTypeName.UniqueIdentifier => ReadUniqueIdentifierSqlType(),
-        SqlTypeName.Image => ReadImageSqlType(),
-        SqlTypeName.RowVersion => ReadTimestampSqlType(),
-        SqlTypeName.Timestamp => ReadTimestampSqlType(),
-        SqlTypeName.Xml => ReadXmlSqlType(),
-        SqlTypeName.Json => ReadJsonSqlType(),
-        SqlTypeName.SqlVariant => ReadSqlVariantSqlType(),
-        SqlTypeName.HierarchyId => ReadHierarchyIdSqlType(),
-        SqlTypeName.Geometry => ReadGeometrySqlType(),
-        SqlTypeName.Geography => ReadGeographySqlType(),
-        SqlTypeName.Cursor => ReadCursorSqlType(),
-        SqlTypeName.Table => ReadTableSqlType(),
+        SqlTypeName.Bit => this.sqlTypeValueBit,
+        SqlTypeName.TinyInt => this.sqlTypeValueTinyInt,
+        SqlTypeName.SmallInt => this.sqlTypeValueSmallInt,
+        SqlTypeName.Int => this.sqlTypeValueInt,
+        SqlTypeName.BigInt => this.sqlTypeValueBigInt,
+        SqlTypeName.SmallMoney => this.sqlTypeValueSmallMoney,
+        SqlTypeName.Money => this.sqlTypeValueMoney,
+        SqlTypeName.Real => this.sqlTypeValueReal,
+        SqlTypeName.Date => this.sqlTypeValueDate,
+        SqlTypeName.SmallDateTime => this.sqlTypeValueSmallDateTime,
+        SqlTypeName.DateTime => this.sqlTypeValueDateTime,
+        SqlTypeName.UniqueIdentifier => this.sqlTypeValueUniqueIdentifier,
+        SqlTypeName.Image => this.sqlTypeValueImage,
+        SqlTypeName.RowVersion => this.sqlTypeValueTimestamp,
+        SqlTypeName.Timestamp => this.sqlTypeValueTimestamp,
+        SqlTypeName.Xml => this.sqlTypeValueXml,
+        SqlTypeName.Json => this.sqlTypeValueJson,
+        SqlTypeName.SqlVariant => this.sqlTypeValueSqlVariant,
+        SqlTypeName.HierarchyId => this.sqlTypeValueHierarchyId,
+        SqlTypeName.Geometry => this.sqlTypeValueGeometry,
+        SqlTypeName.Geography => this.sqlTypeValueGeography,
+        SqlTypeName.Cursor => this.sqlTypeValueCursor,
+        SqlTypeName.Table => this.sqlTypeValueTable,
         _ => throw ExecuteInvalidSqlType()};
 
     private static string ValidateIdentifier(string value, string parameterName)
@@ -596,72 +585,6 @@ internal sealed partial class SqlCollationCatalogSqlTypeProcessingService : ISql
 
         return length;
     }
-
-    private SqlType ReadBitSqlType() =>
-        sqlTypeValueBit;
-
-    private SqlType ReadTinyIntSqlType() =>
-        sqlTypeValueTinyInt;
-
-    private SqlType ReadSmallIntSqlType() =>
-        sqlTypeValueSmallInt;
-
-    private SqlType ReadIntSqlType() =>
-        sqlTypeValueInt;
-
-    private SqlType ReadBigIntSqlType() =>
-        sqlTypeValueBigInt;
-
-    private SqlType ReadSmallMoneySqlType() =>
-        sqlTypeValueSmallMoney;
-
-    private SqlType ReadMoneySqlType() =>
-        sqlTypeValueMoney;
-
-    private SqlType ReadRealSqlType() =>
-        sqlTypeValueReal;
-
-    private SqlType ReadDateSqlType() =>
-        sqlTypeValueDate;
-
-    private SqlType ReadSmallDateTimeSqlType() =>
-        sqlTypeValueSmallDateTime;
-
-    private SqlType ReadDateTimeSqlType() =>
-        sqlTypeValueDateTime;
-
-    private SqlType ReadUniqueIdentifierSqlType() =>
-        sqlTypeValueUniqueIdentifier;
-
-    private SqlType ReadImageSqlType() =>
-        sqlTypeValueImage;
-
-    private SqlType ReadTimestampSqlType() =>
-        sqlTypeValueTimestamp;
-
-    private SqlType ReadXmlSqlType() =>
-        sqlTypeValueXml;
-
-    private SqlType ReadJsonSqlType() =>
-        sqlTypeValueJson;
-
-    private SqlType ReadSqlVariantSqlType() =>
-        sqlTypeValueSqlVariant;
-
-    private SqlType ReadHierarchyIdSqlType() =>
-        sqlTypeValueHierarchyId;
-
-    private SqlType ReadGeometrySqlType() =>
-        sqlTypeValueGeometry;
-
-    private SqlType ReadGeographySqlType() =>
-        sqlTypeValueGeography;
-
-    private SqlType ReadCursorSqlType() =>
-        sqlTypeValueCursor;
-
-    private SqlType ReadTableSqlType() =>
-        sqlTypeValueTable;
 
     public SqlTypeContext CreateSqlTypeContextCatalogScalarType(SqlTypeContext sqlTypeContext) =>
         TryCatch(operation: () =>

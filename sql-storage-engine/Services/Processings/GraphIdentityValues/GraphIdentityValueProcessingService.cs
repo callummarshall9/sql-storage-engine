@@ -32,8 +32,7 @@ internal sealed partial class GraphIdentityValueProcessingService(GraphIdentityS
         {
             Value = new BinarySqlValue
             {
-                Content = new string (identity.Payload.Select(selector: item => (char)item)
-            .ToArray()),
+                Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: identity.Payload),
                 StorageFamily = SqlStorageFamily.Binary
             }
         };

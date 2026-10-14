@@ -55,9 +55,7 @@ internal sealed partial class SqlClrContextService(SqlClrRuntimeBroker broker) :
             Value = value,
             BinaryResult = new BinarySqlValue
             {
-                Content = new string (value.ToArray()
-            .Select(selector: item => (char)item)
-            .ToArray()),
+                Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: value.Span),
                 StorageFamily = SqlStorageFamily.Binary
             }
         };

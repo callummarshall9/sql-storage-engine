@@ -32,17 +32,14 @@ internal sealed partial class StorageSessionAggregationService
         return (written.RootPageId, written.PageIds!);
     }
 
-    private ValueTask FlushCatalogStorageAsync(CancellationToken cancellationToken) =>
-        new ValueTask(task: catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 10 }, cancellationToken: cancellationToken)
-            .AsTask());
+    private ValueTask<CatalogStorageContext> FlushCatalogStorageAsync(CancellationToken cancellationToken) =>
+        catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 10 }, cancellationToken: cancellationToken);
 
-    private ValueTask ReleaseCatalogPageAsync(PageId pageId, CancellationToken cancellationToken) =>
-        new ValueTask(task: catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 11, RootPageId = pageId }, cancellationToken: cancellationToken)
-            .AsTask());
+    private ValueTask<CatalogStorageContext> ReleaseCatalogPageAsync(PageId pageId, CancellationToken cancellationToken) =>
+        catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 11, RootPageId = pageId }, cancellationToken: cancellationToken);
 
-    private ValueTask EnterCatalogMutationAsync(CancellationToken cancellationToken) =>
-        new ValueTask(task: catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 12 }, cancellationToken: cancellationToken)
-            .AsTask());
+    private ValueTask<CatalogStorageContext> EnterCatalogMutationAsync(CancellationToken cancellationToken) =>
+        catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 12 }, cancellationToken: cancellationToken);
 
     private void ExitCatalogMutation() =>
         catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 13 }, cancellationToken: CancellationToken.None)
@@ -78,9 +75,8 @@ internal sealed partial class StorageSessionAggregationService
         }
     }
 
-    private ValueTask InsertCatalogTreeAsync(IndexTreeBinding treeBinding, IndexKey indexKey, RowId rowId, ReadOnlyMemory<byte> includedPayload, CancellationToken cancellationToken) =>
-        new ValueTask(task: catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 5, TreeBinding = treeBinding, Tree = new IndexTreeContext { Key = indexKey, RowId = rowId, IncludedPayload = includedPayload } }, cancellationToken: cancellationToken)
-            .AsTask());
+    private ValueTask<CatalogStorageContext> InsertCatalogTreeAsync(IndexTreeBinding treeBinding, IndexKey indexKey, RowId rowId, ReadOnlyMemory<byte> includedPayload, CancellationToken cancellationToken) =>
+        catalogStorage.ProcessCatalogStorageContextAsync(catalogStorageContext: new CatalogStorageContext { Operation = 5, TreeBinding = treeBinding, Tree = new IndexTreeContext { Key = indexKey, RowId = rowId, IncludedPayload = includedPayload } }, cancellationToken: cancellationToken);
 
     private IReadOnlyList<IndexKey> EncodeIndexKeys(Row row, CatalogTable catalogTable, CatalogIndex catalogIndex) =>
         catalogIndexKeys.PrepareCatalogIndexKeyRequest(catalogIndexKeyRequest: new CatalogIndexKeyRequest { Operation = 1, Row = row, Table = catalogTable, Index = catalogIndex })

@@ -237,9 +237,7 @@ internal sealed partial class SqlExpressionContextManagementService : ISqlExpres
         {
             var value = new BinarySqlValue
             {
-                Content = new string (value: Convert.FromHexString(s: sqlExpressionContext.Token.Text)
-            .Select(selector: item => (char)item)
-            .ToArray()),
+                Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: Convert.FromHexString(s: sqlExpressionContext.Token.Text)),
                 StorageFamily = SqlStorageFamily.Binary
             };
 
@@ -557,37 +555,11 @@ internal sealed partial class SqlExpressionContextManagementService : ISqlExpres
 
     private SqlValue Logical(SqlValue left, SqlValue right, bool and)
     {
-        if (and)
-        {
-            if (!left.IsNull && !AsBoolean(value: left) || !right.IsNull && !AsBoolean(value: right))
-            {
-                return new BooleanSqlValue
-                {
-                    Value = false,
-                    StorageFamily = SqlStorageFamily.Boolean
-                };
-            }
-
-            if (left.IsNull || right.IsNull)
-            {
-                return new NullSqlValue
-                {
-                    IsNull = true
-                };
-            }
-
-            return new BooleanSqlValue
-            {
-                Value = true,
-                StorageFamily = SqlStorageFamily.Boolean
-            };
-        }
-
-        if (!left.IsNull && AsBoolean(value: left) || !right.IsNull && AsBoolean(value: right))
+        if (!left.IsNull && AsBoolean(value: left) != and || !right.IsNull && AsBoolean(value: right) != and)
         {
             return new BooleanSqlValue
             {
-                Value = true,
+                Value = !and,
                 StorageFamily = SqlStorageFamily.Boolean
             };
         }
@@ -599,7 +571,7 @@ internal sealed partial class SqlExpressionContextManagementService : ISqlExpres
 
         : new BooleanSqlValue
         {
-            Value = false,
+            Value = and,
             StorageFamily = SqlStorageFamily.Boolean
         };
     }

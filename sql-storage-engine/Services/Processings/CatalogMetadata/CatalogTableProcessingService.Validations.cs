@@ -201,7 +201,8 @@ internal sealed partial class CatalogTableProcessingService
         var computedNames = computed.Select(selector: item => item.column.Name)
             .ToHashSet(comparer: StringComparer.OrdinalIgnoreCase);
 
-        var dependencies = computed.ToDictionary(keySelector: item => item.position, elementSelector: item => computedNames.Where(predicate: name => ExpressionReferencesColumn(expression: item.column.ComputedExpression!, columnName: name))
+        var dependencies = computed.ToDictionary(keySelector: item => item.position, elementSelector: item => ExpressionIdentifiers(expression: item.column.ComputedExpression!)
+            .Where(predicate: identifier => computedNames.Contains(item: identifier))
             .ToHashSet(comparer: StringComparer.OrdinalIgnoreCase));
 
         var completed = new HashSet<string>(comparer: StringComparer.OrdinalIgnoreCase);
@@ -234,6 +235,8 @@ internal sealed partial class CatalogTableProcessingService
 
     private static IEnumerable<string> ExpressionIdentifiers(string expression)
     {
+        ArgumentNullException.ThrowIfNull(argument: expression);
+
         for (var position = 0; position < expression.Length;)
         {
             if (expression[position] == '\'')

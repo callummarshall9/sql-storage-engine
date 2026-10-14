@@ -546,9 +546,7 @@ internal sealed partial class RowScalarPayloadOrchestrationService : IRowScalarP
     private static SqlValue CreateBinarySqlValue(ReadOnlySpan<byte> value) =>
         new BinarySqlValue
     {
-        Content = new string (value.ToArray()
-            .Select(selector: item => (char)item)
-            .ToArray()),
+        Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: value),
         StorageFamily = SqlStorageFamily.Binary
     };
 

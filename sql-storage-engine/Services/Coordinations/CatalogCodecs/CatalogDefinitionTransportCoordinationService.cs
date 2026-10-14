@@ -31,10 +31,7 @@ internal sealed partial class CatalogDefinitionTransportCoordinationService : IC
                 definition = definition with
                 {
                     XmlSchemaCollectionsSource = definition.XmlSchemaCollectionsSource?.Select(selector: schema => PrepareRegisteredXmlSchema(sqlXmlSchemaCollection: schema))
-            .ToArray()
-                };
-                definition = definition with
-                {
+            .ToArray(),
                     ScalarTypesSource = definition.ScalarTypesSource?.Select(selector: scalar => catalogDefinitionTypes.ProcessCatalogCodecContext(catalogCodecContext: new CatalogCodecContext { Operation = 15, SqlTypeContext = new SqlTypeContext { SqlTypeSource = scalar.Definition } })
             .CreateSqlTypeContextCatalogScalarTypeResult!.CatalogScalarTypeResult!)
             .ToArray()

@@ -60,16 +60,7 @@ internal sealed partial class TransactionLifecycleService : ITransactionLifecycl
         {
             ValidateActiveState(state: state, operation: "Rollback");
 
-            try
-            {
-                state.Rollback?.Invoke();
-                state.Phase = TransactionState.RolledBack;
-            }
-            catch
-            {
-                state.Phase = TransactionState.Failed;
-                throw;
-            }
+            RollbackCore(state: state);
         }
     });
 
@@ -85,16 +76,21 @@ internal sealed partial class TransactionLifecycleService : ITransactionLifecycl
                 return;
             }
 
-            try
-            {
-                state.Rollback?.Invoke();
-                state.Phase = TransactionState.RolledBack;
-            }
-            catch
-            {
-                state.Phase = TransactionState.Failed;
-                throw;
-            }
+            RollbackCore(state: state);
         }
     });
+
+    private static void RollbackCore(TransactionLifecycleState state)
+    {
+        try
+        {
+            state.Rollback?.Invoke();
+            state.Phase = TransactionState.RolledBack;
+        }
+        catch
+        {
+            state.Phase = TransactionState.Failed;
+            throw;
+        }
+    }
 }

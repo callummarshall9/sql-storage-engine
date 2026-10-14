@@ -13,6 +13,49 @@ using sql_storage_engine.Services.Coordinations.SqlValueComparisons;
 namespace sql_storage_engine.UnitTests;
 public sealed class SqlExpressionArchitectureTests
 {
+    [TestCase("NULL", "AND", "NULL", null)]
+    [TestCase("NULL", "AND", "0", false)]
+    [TestCase("NULL", "AND", "1", null)]
+    [TestCase("0", "AND", "NULL", false)]
+    [TestCase("0", "AND", "0", false)]
+    [TestCase("0", "AND", "1", false)]
+    [TestCase("1", "AND", "NULL", null)]
+    [TestCase("1", "AND", "0", false)]
+    [TestCase("1", "AND", "1", true)]
+    [TestCase("NULL", "OR", "NULL", null)]
+    [TestCase("NULL", "OR", "0", null)]
+    [TestCase("NULL", "OR", "1", true)]
+    [TestCase("0", "OR", "NULL", null)]
+    [TestCase("0", "OR", "0", false)]
+    [TestCase("0", "OR", "1", true)]
+    [TestCase("1", "OR", "NULL", true)]
+    [TestCase("1", "OR", "0", true)]
+    [TestCase("1", "OR", "1", true)]
+    [TestCase("0", "AND", "'not a bit'", false)]
+    [TestCase("1", "OR", "'not a bit'", true)]
+    public void ExpressionManagement_PreservesThreeValuedLogicAndConversionShortCircuit(string left, string operation, string right, bool? expected)
+    {
+        var result = SqlExpressionExposure.Evaluate(expression: $"{left} {operation} {right}");
+
+        if (expected is { } boolean)
+        {
+            result.Should().Be(SqlValueExposure.CreateBooleanSqlValue(value: boolean));
+        }
+        else
+        {
+            result.Should().BeOfType<NullSqlValue>();
+        }
+    }
+
+    [TestCase("AND", "0")]
+    [TestCase("OR", "1")]
+    public void ExpressionManagement_ConvertsLeftBeforeDecisiveRight(string operation, string right)
+    {
+        ((Action)(() => SqlExpressionExposure.Evaluate(expression: $"'not a bit' {operation} {right}")))
+            .Should().Throw<sql_storage_engine.Models.Exceptions.StorageModelServiceException>()
+            .Which.GetBaseException().Should().BeOfType<FormatException>();
+    }
+
     [Test]
     public void ExpressionManagement_PreservesNestedNamesAndSqlNullLogic()
     {

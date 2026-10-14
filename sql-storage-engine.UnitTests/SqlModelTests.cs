@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using sql_storage_engine.Exposures.Rows;
 using sql_storage_engine.Rows;
 using sql_storage_engine.Models.Identifiers;
 
@@ -6,6 +7,23 @@ using sql_storage_engine.Models.Rows;
 namespace sql_storage_engine.UnitTests;
 public sealed class SqlModelTests
 {
+    [Test]
+    public void BinaryValues_PreserveAllByteValuesThroughExpressionsAndRowEncoding()
+    {
+        var bytes = Enumerable.Range(start: 0, count: 256).Select(value => (byte)value).ToArray();
+        var value = (BinarySqlValue)SqlValueExposure.CreateBinarySqlValue(value: bytes);
+        SqlValueExposure.ReadBinarySqlValue(binarySqlValue: value).ToArray().Should().Equal(bytes);
+        SqlExpressionExposure.Evaluate(expression: "0x" + Convert.ToHexString(bytes)).Should().Be(value);
+
+        var schema = TableDefinitionExposure.CreateTableDefinition(columnDefinitions:
+        [
+            ColumnDefinitionExposure.CreateColumnDefinition(columnId: new ColumnId { Value = 1 }, name: "payload", sqlType: SqlTypeExposure.CreateVarBinarySqlType(length: 256), isNullable: false)
+        ]);
+        var row = RowExposure.CreateRow(values: [value]);
+        var decoded = RowCodecExposure.Decode(source: RowCodecExposure.Encode(row: row, tableDefinition: schema), tableDefinition: schema);
+        decoded.Values.Single().Should().Be(value);
+    }
+
     [Test]
     public void EveryInitialType_HasTypedRepresentationAndNullIsDistinctFromDefaults()
     {

@@ -20,7 +20,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
     private readonly object _sync = new();
     private readonly ILockRulesProcessingService _lockRules;
     private readonly Dictionary<LockResource, LockResourceState> _resources = [];
-    private readonly Dictionary<TransactionId, HashSet<LockResource>> _owned = [];
     private readonly Dictionary<TransactionId, Action> _victimHandlers = [];
     private long _deadlockCount;
     private long _nextRequestSequence;
@@ -43,13 +42,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
 
     private void RegisterVictimHandlerCore(TransactionId transactionId, Action handler)
     {
-        if (transactionId.Value == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(transactionId));
-        }
-
-        ArgumentNullException.ThrowIfNull(argument: handler);
-
         lock (_sync)
         {
             if (!_victimHandlers.TryAdd(key: transactionId, value: handler))
@@ -61,7 +53,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
 
     private ValueTask AcquireAsyncCore(TransactionId transactionId, LockResource resource, LockMode mode, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(transactionId: transactionId, resource: resource, mode: mode);
         resource = lockRelations.PrepareLockResource(lockResource: resource);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -98,7 +89,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
 
     private ValueTask ConvertAsyncCore(TransactionId transactionId, LockResource resource, LockMode mode, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(transactionId: transactionId, resource: resource, mode: mode);
         resource = lockRelations.PrepareLockResource(lockResource: resource);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -140,7 +130,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
 
     private bool ReleaseCore(TransactionId transactionId, LockResource resource)
     {
-        ArgumentNullException.ThrowIfNull(argument: resource);
         resource = lockRelations.PrepareLockResource(lockResource: resource);
 
         lock (_sync)
@@ -150,7 +139,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
                 return false;
             }
 
-            RemoveOwnership(transactionId: transactionId, resource: resource);
             CancelWaitingRequests(state: state, transactionId: transactionId);
             ProcessQueues();
             RemoveResourceIfEmpty(resource: resource, state: state);
@@ -170,7 +158,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
                 RemoveResourceIfEmpty(resource: pair.Key, state: pair.Value);
             }
 
-            _owned.Remove(key: transactionId);
             _victimHandlers.Remove(key: transactionId);
         }
     }
@@ -311,7 +298,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
             RemoveResourceIfEmpty(resource: pair.Key, state: pair.Value);
         }
 
-        _owned.Remove(key: victim);
         _victimHandlers.Remove(key: victim);
     }
 
@@ -354,13 +340,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
                 request.CancellationRegistration.Unregister();
                 state.Granted[request.TransactionId] = request.Mode;
 
-                if (!_owned.TryGetValue(key: request.TransactionId, value: out var resources))
-                {
-                    resources = [];
-                    _owned.Add(key: request.TransactionId, value: resources);
-                }
-
-                resources.Add(item: resource);
                 request.Completion.TrySetResult();
                 granted = true;
             }
@@ -451,21 +430,6 @@ internal sealed partial class LockManagerContextOrchestrationService : ILockMana
                 request.CancellationRegistration.Unregister();
                 request.Completion.TrySetException(exception: new InvalidOperationException($"Transaction {transactionId} released its locks while a request was waiting."));
             }
-        }
-    }
-
-    private void RemoveOwnership(TransactionId transactionId, LockResource resource)
-    {
-        if (!_owned.TryGetValue(key: transactionId, value: out var resources))
-        {
-            return;
-        }
-
-        resources.Remove(item: resource);
-
-        if (resources.Count == 0)
-        {
-            _owned.Remove(key: transactionId);
         }
     }
 

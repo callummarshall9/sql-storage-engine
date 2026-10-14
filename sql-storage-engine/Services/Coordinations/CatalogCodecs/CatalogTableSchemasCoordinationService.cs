@@ -38,10 +38,7 @@ internal sealed partial class CatalogTableSchemasCoordinationService : ICatalogT
                 table = table with
                 {
                     ColumnsSource = table.ColumnsSource.Select(selector: column => PrepareColumn(catalogColumn: column))
-            .ToArray()
-                };
-                table = table with
-                {
+            .ToArray(),
                     CheckConstraintsSource = PrepareChecks(checks: table.CheckConstraintsSource)
                 };
                 if (table.SystemVersioningSource is not null)
@@ -71,14 +68,8 @@ internal sealed partial class CatalogTableSchemasCoordinationService : ICatalogT
                 tableType = tableType with
                 {
                     ColumnsSource = tableType.ColumnsSource.Select(selector: column => PrepareColumn(catalogColumn: column))
-            .ToArray()
-                };
-                tableType = tableType with
-                {
-                    CheckConstraintsSource = PrepareChecks(checks: tableType.CheckConstraintsSource)
-                };
-                tableType = tableType with
-                {
+            .ToArray(),
+                    CheckConstraintsSource = PrepareChecks(checks: tableType.CheckConstraintsSource),
                     IndexesSource = tableType.IndexesSource?.Select(selector: index => catalogTableTypeShapes.ProcessCatalogCodecContext(catalogCodecContext: new CatalogCodecContext { Operation = 16, CatalogTableTypeIndex = index })
             .PrepareCatalogTableTypeIndexResult!)
             .ToArray()

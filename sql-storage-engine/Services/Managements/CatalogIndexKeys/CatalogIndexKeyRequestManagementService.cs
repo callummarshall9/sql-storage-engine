@@ -381,7 +381,7 @@ internal sealed partial class CatalogIndexKeyRequestManagementService : ICatalog
             .position)
             .ToArray();
 
-        var schema = CreateTableDefinition(columnDefinitions: columns.Select(selector: column => CreateColumnDefinition(columnId: column.Id, name: column.Name, sqlType: column.Type, isNullable: column.IsNullable, catalogColumnEncryption: column.Encryption, isSparse: column.IsSparse, isColumnSet: column.IsColumnSet)));
+        var schema = CreateIncludedColumnTableDefinition(columns: columns);
         var encoded = EncodeRow(row: CreateRow(values: positions.Select(selector: position => row.Values[position])), table: schema);
 
         if (encoded.Length > ushort.MaxValue)
@@ -413,12 +413,15 @@ internal sealed partial class CatalogIndexKeyRequestManagementService : ICatalog
         }
 
         var columns = IncludedColumns(table: table, index: index);
-        var schema = CreateTableDefinition(columnDefinitions: columns.Select(selector: column => CreateColumnDefinition(columnId: column.Id, name: column.Name, sqlType: column.Type, isNullable: column.IsNullable, catalogColumnEncryption: column.Encryption, isSparse: column.IsSparse, isColumnSet: column.IsColumnSet)));
+        var schema = CreateIncludedColumnTableDefinition(columns: columns);
         var row = DecodeRow(source: payload, table: schema);
 
         return columns.Select(selector: (column, position) => (column.Id, Value: row.Values[position]))
             .ToDictionary(keySelector: item => item.Id, elementSelector: item => item.Value);
     }
+
+    private TableDefinition CreateIncludedColumnTableDefinition(IReadOnlyList<CatalogColumn> columns) =>
+        CreateTableDefinition(columnDefinitions: columns.Select(selector: column => CreateColumnDefinition(columnId: column.Id, name: column.Name, sqlType: column.Type, isNullable: column.IsNullable, catalogColumnEncryption: column.Encryption, isSparse: column.IsSparse, isColumnSet: column.IsColumnSet)));
 
     private IReadOnlyList<CatalogColumn> IncludedColumns(CatalogTable table, CatalogIndex index)
     {
@@ -516,9 +519,7 @@ internal sealed partial class CatalogIndexKeyRequestManagementService : ICatalog
                             WriteByte(output: segment, value: boolean.Value ? (byte)1 : (byte)0);
                             break;
                         case IntegerSqlValue integer:
-                            var integerBytes = new byte[8];
-                            BinaryPrimitives.WriteUInt64BigEndian(destination: integerBytes, value: unchecked((ulong)integer.Value) ^ 0x8000000000000000UL);
-                            Write(output: segment, value: integerBytes);
+                            WriteSortableInt64(output: segment, value: integer.Value);
                             break;
                         case TextSqlValue text:
                             WriteEscapedBytes(output: segment, bytes: GetTextSortKey(value: text.Value, type: column.Type, indexCollation: indexed.Collation));
@@ -561,17 +562,21 @@ internal sealed partial class CatalogIndexKeyRequestManagementService : ICatalog
                 }
             }
 
-            var encodedSegment = segment.WrittenSpan.ToArray();
-
             if (indexed.Direction == SortDirection.Descending)
             {
+                var encodedSegment = segment.WrittenSpan.ToArray();
+
                 for (var offset = 1; offset < encodedSegment.Length; offset++)
                 {
                     encodedSegment[offset] ^= 0xFF;
                 }
-            }
 
-            Write(output: output, value: encodedSegment);
+                Write(output: output, value: encodedSegment);
+            }
+            else
+            {
+                Write(output: output, value: segment.WrittenSpan);
+            }
         }
 
         var maximumKeyBytes = maximumKeyBytesOverride ?? (index.StorageKind == CatalogIndexStorageKind.Clustered ? MaximumClusteredKeyBytes : MaximumNonClusteredKeyBytes);

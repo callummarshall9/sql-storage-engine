@@ -248,9 +248,7 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
     private static SqlValue CreateBinarySqlValue(ReadOnlySpan<byte> value) =>
         new BinarySqlValue
     {
-        Content = new string (value.ToArray()
-            .Select(selector: item => (char)item)
-            .ToArray()),
+        Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: value),
         StorageFamily = SqlStorageFamily.Binary
     };
 
@@ -364,42 +362,14 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
         for (var index = 0; index < table.Columns.Count; index++)
         {
             var column = table.Columns[index];
-            var isNull = (source[HeaderLength + index / 8] & (1 << (index % 8))) != 0;
-
-            if (isNull)
-            {
-                if (!column.IsNullable)
-                {
-                    throw new StorageFormatException($"Non-nullable column '{column.Name}' is encoded as NULL.");
-                }
-
-                values[index] = new NullSqlValue
-                {
-                    IsNull = true
-                };
-            }
-            else if (!IsVariable(column: column))
-            {
-                values[index] = DecodeFixedValue(source: source[fixedOffset..], column: column);
-            }
-            else
-            {
-                var entry = variables[index];
-
-                if (entry.Storage == RowValueStorage.Overflow)
-                {
-                    throw new StorageFormatException("Overflow row values require the overflow-aware decoder.");
-                }
-
-                values[index] = DecodeVariableValue(source: source.Slice(start: entry.Offset, length: entry.Length), column: column);
-            }
+            values[index] = DecodeColumn(source: source, column: column, columnIndex: index, fixedOffset: fixedOffset, variables: variables);
 
             fixedOffset = checked(fixedOffset + GetFixedWidth(column: column));
         }
 
         return new Row
         {
-            Values = (values).ToArray()
+            Values = values
         };
     }
 
@@ -408,13 +378,12 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
         ArgumentNullException.ThrowIfNull(argument: columnIds);
         var requested = columnIds.ToArray();
 
-        if (requested.Distinct()
-            .Count() != requested.Length)
+        var requestedSet = requested.ToHashSet();
+
+        if (requestedSet.Count != requested.Length)
         {
             throw new ArgumentException("Requested columns must be unique.", nameof(columnIds));
         }
-
-        var requestedSet = requested.ToHashSet();
 
         if (requestedSet.Any(predicate: id => table.Columns.All(predicate: column => column.Id != id)))
         {
@@ -536,11 +505,6 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
     {
         Dictionary<int, RowVariableEntry> entries = [];
 
-        var eligibleColumnIndexes = table.Columns.Select(selector: (column, index) => (column, index))
-            .Where(predicate: item => IsVariable(column: item.column))
-            .Select(selector: item => item.index)
-            .ToHashSet();
-
         var cursor = checked((int)header.VariableDataOffset);
         var previousColumnIndex = -1;
 
@@ -556,7 +520,7 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
                 throw new StorageFormatException("Unknown variable-value storage tag.");
             }
 
-            if (!eligibleColumnIndexes.Contains(item: columnIndex) || columnIndex <= previousColumnIndex)
+            if (columnIndex >= table.Columns.Count || !IsVariable(column: table.Columns[columnIndex]) || columnIndex <= previousColumnIndex)
             {
                 throw new StorageFormatException("Variable offset table does not follow schema order.");
             }
@@ -586,13 +550,15 @@ internal sealed partial class RowFormatContextCoordinationService : IRowFormatCo
             }
 
             var isNull = (source[HeaderLength + index / 8] & (1 << (index % 8))) != 0;
+            var isOmittable = IsOmittable(column: column);
+            var hasEntry = entries.ContainsKey(key: index);
 
-            if (!IsOmittable(column: column) && !entries.ContainsKey(key: index) || IsOmittable(column: column) && !isNull && !entries.ContainsKey(key: index))
+            if ((!isOmittable || !isNull) && !hasEntry)
             {
                 throw new StorageFormatException("Variable offset table omits a required value.");
             }
 
-            if (IsOmittable(column: column) && isNull && entries.ContainsKey(key: index))
+            if (isOmittable && isNull && hasEntry)
             {
                 throw new StorageFormatException("A NULL sparse or virtual column must not have a variable entry.");
             }

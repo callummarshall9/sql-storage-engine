@@ -115,10 +115,10 @@ internal sealed partial class CatalogCodecManagementService : ICatalogCodecManag
             WriteString(output: output, value: collection.SchemaName);
             WriteString(output: output, value: collection.Name);
 
-            WriteUInt32(output: output, value: checked((uint)ReadSqlXmlSchemaCollectionDefinitions(sqlXmlSchemaCollection: collection)
-            .Count));
+            var definitions = ReadSqlXmlSchemaCollectionDefinitions(sqlXmlSchemaCollection: collection);
+            WriteUInt32(output: output, value: checked((uint)definitions.Count));
 
-            foreach (var definition in ReadSqlXmlSchemaCollectionDefinitions(sqlXmlSchemaCollection: collection))
+            foreach (var definition in definitions)
             {
                 WriteString(output: output, value: definition);
             }
@@ -626,7 +626,7 @@ internal sealed partial class CatalogCodecManagementService : ICatalogCodecManag
             {
                 CatalogIndexMethod.BTree when specializedValues.Length == 0 && rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => null,
                 CatalogIndexMethod.Json when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CreateJsonCatalogSpecializedIndexOptions(paths: specializedValues),
-                CatalogIndexMethod.Spatial when specializedValues.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 => spatialSrid is { } exactSrid ? CreateSpatialCatalogSpecializedIndexOptions(srid: exactSrid) : CreateSpatialCatalogSpecializedIndexOptions(),
+                CatalogIndexMethod.Spatial when specializedValues.Length == 0 && rawMetric == 0 && rawXmlKind == 0 && xmlNamespaces.Count == 0 => spatialSrid is { } exactSrid ? CreateSpatialCatalogSpecializedIndexOptions(srid: exactSrid) : PrepareCatalogSpecializedIndexOptions(catalogSpecializedIndexOptions: new CatalogSpecializedIndexOptions { Method = CatalogIndexMethod.Spatial }),
                 CatalogIndexMethod.Vector when specializedValues.Length == 0 && rawMetric != 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => CreateVectorCatalogSpecializedIndexOptions(metric: (SqlVectorDistanceMetric)rawMetric),
                 CatalogIndexMethod.Xml when rawMetric == 0 && spatialSrid is null && rawXmlKind != 0 => CreateXmlCatalogSpecializedIndexOptions(kind: (CatalogXmlIndexKind)rawXmlKind, namespaces: xmlNamespaces, paths: specializedValues),
                 CatalogIndexMethod.FullText when rawMetric == 0 && spatialSrid is null && rawXmlKind == 0 && xmlNamespaces.Count == 0 => DecodeFullTextOptions(values: specializedValues),
@@ -1318,9 +1318,6 @@ internal sealed partial class CatalogCodecManagementService : ICatalogCodecManag
 
     private CatalogSpecializedIndexOptions CreateJsonCatalogSpecializedIndexOptions(params string[] paths) =>
         PrepareCatalogSpecializedIndexOptions(catalogSpecializedIndexOptions: new CatalogSpecializedIndexOptions { Method = CatalogIndexMethod.Json, PathSource = paths, RequirePaths = true });
-
-    private CatalogSpecializedIndexOptions CreateSpatialCatalogSpecializedIndexOptions() =>
-        PrepareCatalogSpecializedIndexOptions(catalogSpecializedIndexOptions: new CatalogSpecializedIndexOptions { Method = CatalogIndexMethod.Spatial });
 
     private CatalogSpecializedIndexOptions CreateSpatialCatalogSpecializedIndexOptions(int srid) =>
         PrepareCatalogSpecializedIndexOptions(catalogSpecializedIndexOptions: new CatalogSpecializedIndexOptions { Method = CatalogIndexMethod.Spatial, SpatialSrid = srid });

@@ -171,9 +171,9 @@ internal sealed partial class BalancingTreeService<TKey, TValue> : IBalancingTre
 
     private bool TryGetValue(TKey key, out TValue value)
     {
-        foreach (var matchingValue in Find(key: key))
+        if (TryGetLowerBound(key: key, entry: out var entry) && KeysEqual(left: entry.Key, right: key))
         {
-            value = matchingValue;
+            value = entry.Value;
             return true;
         }
 

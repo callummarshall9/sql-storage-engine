@@ -4,7 +4,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Pages;
@@ -319,9 +318,7 @@ internal sealed partial class PageDatabaseContextAllocationOrchestrationService(
         new BinarySqlValue
     {
         StorageFamily = SqlStorageFamily.Binary,
-        Content = new string (value: value.ToArray()
-            .Select(selector: item => (char)item)
-            .ToArray())
+        Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: value)
     };
 
     private static SqlValue CreateDateTimeSqlValue(DateTime value) =>
