@@ -1,10 +1,14 @@
-
+﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine", "sql-storage-engine\sql-storage-engine.csproj", "{E675226F-3DF7-410E-B8CC-60ADC60A731F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SqlStorageEngine", "SqlStorageEngine\SqlStorageEngine.csproj", "{E675226F-3DF7-410E-B8CC-60ADC60A731F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine.UnitTests", "sql-storage-engine.UnitTests\sql-storage-engine.UnitTests.csproj", "{188F26C9-50B9-4590-B5AC-8800E257A7FC}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine.AzureBlob", "sql-storage-engine.AzureBlob\sql-storage-engine.AzureBlob.csproj", "{B5041AE6-944C-420C-BCCF-0897A580AA25}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "sql-storage-engine.S3", "sql-storage-engine.S3\sql-storage-engine.S3.csproj", "{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -40,10 +44,32 @@ Global
 		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Release|x64.Build.0 = Release|Any CPU
 		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Release|x86.ActiveCfg = Release|Any CPU
 		{188F26C9-50B9-4590-B5AC-8800E257A7FC}.Release|x86.Build.0 = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|x64.Build.0 = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Debug|x86.Build.0 = Debug|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|x64.ActiveCfg = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|x64.Build.0 = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|x86.ActiveCfg = Release|Any CPU
+		{B5041AE6-944C-420C-BCCF-0897A580AA25}.Release|x86.Build.0 = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|x64.Build.0 = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Debug|x86.Build.0 = Debug|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|x64.ActiveCfg = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|x64.Build.0 = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|x86.ActiveCfg = Release|Any CPU
+		{56E7FE00-EE11-4AE3-B53B-A4C16616F2CC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
 	EndGlobalSection
 EndGlobal
