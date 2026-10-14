@@ -19,6 +19,4 @@ public static class LeafIndexPageExposure
     public static LeafIndexPage ReadLeafIndexPage(ReadOnlySpan<byte> page, ulong expectedPageId) =>
         service.ReadLeafIndexPage(page: page, expectedPageId: expectedPageId);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadLeafIndexPage(page: source.Span, expectedPageId: 1);
 }

@@ -12,6 +12,5 @@ internal enum IdentifierDisplayKind
     LogSequence,
     Slot,
     Generation,
-    Row,
-    Column
+    Row
 }

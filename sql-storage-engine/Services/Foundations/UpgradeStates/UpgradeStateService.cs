@@ -2,13 +2,14 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using sql_storage_engine.Models.Diagnostics;
+using sql_storage_engine.Brokers.UpgradeSerialization;
+
 using sql_storage_engine.Storage;
-using sql_storage_engine.Brokers.SecuritySerialization;
 
 namespace sql_storage_engine.Services.Foundations.UpgradeStates;
 internal sealed partial class UpgradeStateService : IUpgradeStateService
 {
-    private readonly SecuritySerializationBroker serialization = new SecuritySerializationBroker();
+    private readonly UpgradeSerializationBroker serialization = new UpgradeSerializationBroker();
     public UpgradeContext DecodeUpgradeContext(UpgradeContext upgradeContext) =>
         TryCatch(operation: () =>
     {

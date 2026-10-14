@@ -36,6 +36,4 @@ public static class IdentifierDisplayExposure
     public static string FormatRowId(RowId rowId) =>
         service.FormatIdentifierDisplay(identifierDisplay: new IdentifierDisplay { Kind = IdentifierDisplayKind.Row, Value = rowId.PageId.Value, SlotValue = rowId.SlotId.Value, GenerationValue = rowId.Generation.Value });
 
-    public static string FormatColumnId(ColumnId columnId) =>
-        service.FormatIdentifierDisplay(identifierDisplay: new IdentifierDisplay { Kind = IdentifierDisplayKind.Column, Value = columnId.Value });
 }

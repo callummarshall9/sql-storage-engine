@@ -15,6 +15,4 @@ public static class DatabaseHeaderExposure
     public static DatabaseHeader ReadDatabaseHeader(ReadOnlySpan<byte> page) =>
         service.ReadDatabaseHeader(page: page);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadDatabaseHeader(page: source.Span);
 }

@@ -6,6 +6,8 @@ using System;
 using System.IO;
 using sql_storage_engine.Models.Exceptions;
 
+using sql_storage_engine.Storage;
+
 namespace sql_storage_engine.Services.Coordinations.CatalogStorage;
 internal sealed partial class CatalogPublicationCoordinationService
 {

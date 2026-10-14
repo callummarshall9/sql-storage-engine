@@ -2,8 +2,8 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using sql_storage_engine.Models.Identifiers;
-using sql_storage_engine.Storage;
 using System;
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Transactions;
 /// <summary>Reports that a deterministic deadlock victim was rolled back so surviving transactions can continue.</summary>

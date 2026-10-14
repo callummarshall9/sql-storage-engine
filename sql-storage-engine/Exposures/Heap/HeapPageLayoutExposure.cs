@@ -29,6 +29,4 @@ public static class HeapPageLayoutExposure
     public static int CalculateHeapSlotEntryOffset(ushort slotIndex) =>
         service.CalculateHeapPageLayoutSlotOffset(slotIndex: slotIndex);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadHeapPageLayout(page: source.Span, expectedPageId: null);
 }

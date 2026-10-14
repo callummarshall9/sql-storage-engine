@@ -21,6 +21,4 @@ public static class OverflowPageHeaderExposure
     public static ReadOnlyMemory<byte> ReadOverflowPageHeaderPayload(ReadOnlySpan<byte> page, ulong expectedPageId) =>
         service.ReadOverflowPageHeaderPayload(page: page, expectedPageId: expectedPageId);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadOverflowPageHeader(page: source.Span, expectedPageId: 1);
 }

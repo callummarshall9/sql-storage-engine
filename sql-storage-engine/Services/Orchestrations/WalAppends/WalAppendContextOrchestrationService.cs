@@ -6,10 +6,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Logging;
 using sql_storage_engine.Models.Identifiers;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Services.Processings.WalDevices;
 using sql_storage_engine.Services.Processings.WalRecordContexts;
 using sql_storage_engine.Services.Processings.CheckpointStates;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Orchestrations.WalAppends;
 internal sealed partial class WalAppendContextOrchestrationService : IWalAppendContextOrchestrationService

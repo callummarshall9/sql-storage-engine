@@ -8,6 +8,7 @@ using sql_storage_engine.Models.Storage;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Models.Buffers;
 using sql_storage_engine.Pages;
+
 using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Managements.EngineResources;
@@ -91,22 +92,6 @@ internal sealed partial class EngineResourceContextManagementService : IEngineRe
     {
         ValidateRequest(engineResourceContext: engineResourceContext);
         return lifecycle.RegisterScopeEngineResourceContext(engineResourceContext: engineResourceContext);
-    });
-
-    public ValueTask<EngineResourceContext> EnterSecurityEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken) =>
-        TryCatch<EngineResourceContext>(operation: async () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
-
-        return await lifecycle.EnterSecurityEngineResourceContextAsync(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-    });
-
-    public EngineResourceContext ReleaseSecurityEngineResourceContext(EngineResourceContext engineResourceContext) =>
-        TryCatch<EngineResourceContext>(operation: () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext);
-        return lifecycle.ReleaseSecurityEngineResourceContext(engineResourceContext: engineResourceContext);
     });
 
     public ValueTask<EngineResourceContext> FlushBufferEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken) =>
@@ -432,7 +417,6 @@ internal sealed partial class EngineResourceContextManagementService : IEngineRe
     private async ValueTask<EngineResourceContext> OpenCoreEngineResourceContextAsync(EngineResourceContext engineResourceContext, bool creating, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(argument: engineResourceContext.Path);
-        ArgumentException.ThrowIfNullOrWhiteSpace(argument: engineResourceContext.DefaultCollation);
 
         if (engineResourceContext.BufferCapacity <= 0)
         {
@@ -453,7 +437,6 @@ internal sealed partial class EngineResourceContextManagementService : IEngineRe
             {
                 Path = engineResourceContext.Path,
                 PageSize = engineResourceContext.PageSize,
-                DefaultCollation = engineResourceContext.DefaultCollation,
                 OpenMode = DatabaseOpenMode.Writer
             };
 

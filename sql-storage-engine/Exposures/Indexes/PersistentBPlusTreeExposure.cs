@@ -33,6 +33,17 @@ public sealed class PersistentBPlusTreeExposure : ICompositionExposure, IIndexTr
             .Value, UpdateRoot = (id, token) => rootReference.UpdateRootAsync(rootPageId: new PageId { Value = id }, cancellationToken: token), IsUnique = isUnique });
     }
 
+    public static ValueTask<PersistentBPlusTreeExposure> CreatePersistentBPlusTreeExposureAsync(IBufferPoolExposure bufferPool, IPageAllocatorExposure allocator, IIndexRootReference rootReference, bool isUnique = false, CancellationToken cancellationToken = default) =>
+        new PersistentBPlusTreeExposure(bufferPool: bufferPool, allocator: allocator, rootReference: rootReference, isUnique: isUnique).CreateIndexTreeContextPersistentBPlusTreeExposureAsync(cancellationToken: cancellationToken);
+
+    private async ValueTask<PersistentBPlusTreeExposure> CreateIndexTreeContextPersistentBPlusTreeExposureAsync(CancellationToken cancellationToken)
+    {
+        await service.CreateIndexTreeContextAsync(indexTreeContext: new IndexTreeContext(), cancellationToken: cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
+
+        return this;
+    }
+
     public PageId ReadRootPageId() =>
         service.ReadIndexTreeContext(indexTreeContext: new IndexTreeContext())
             .RootPageId;

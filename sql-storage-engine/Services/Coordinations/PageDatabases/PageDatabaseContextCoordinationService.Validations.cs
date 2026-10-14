@@ -5,7 +5,6 @@ using System;
 using System.Threading;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Catalog;
 
 namespace sql_storage_engine.Services.Coordinations.PageDatabases;
 internal sealed partial class PageDatabaseContextCoordinationService
@@ -29,7 +28,6 @@ internal sealed partial class PageDatabaseContextCoordinationService
     {
         ArgumentNullException.ThrowIfNull(argument: pageDatabaseContext);
         ArgumentException.ThrowIfNullOrWhiteSpace(argument: pageDatabaseContext.Path);
-        ArgumentException.ThrowIfNullOrWhiteSpace(argument: pageDatabaseContext.DefaultCollation);
 
         if (!Enum.IsDefined(value: (PageSize)pageDatabaseContext.PageSize))
         {
@@ -109,16 +107,6 @@ internal sealed partial class PageDatabaseContextCoordinationService
         if (pageId == 0)
         {
             throw new ArgumentOutOfRangeException(paramName: nameof(pageId));
-        }
-    }
-
-    private static void ValidateGeneratedValue(PageDatabaseContext pageDatabaseContext, CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken)
-    {
-        ValidateMutation(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken);
-
-        if (kind == CatalogGeneratedAlwaysKind.None || !Enum.IsDefined(value: kind))
-        {
-            throw new ArgumentOutOfRangeException(paramName: nameof(kind));
         }
     }
 

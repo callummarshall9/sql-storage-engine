@@ -5,7 +5,6 @@ using System;
 using System.Threading;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Catalog;
 
 namespace sql_storage_engine.Services.Orchestrations.PageDatabaseAllocations;
 internal sealed partial class PageDatabaseContextAllocationOrchestrationService
@@ -52,16 +51,6 @@ internal sealed partial class PageDatabaseContextAllocationOrchestrationService
 
     private static void ValidateCatalog(PageDatabaseContext pageDatabaseContext, ulong pageId, CancellationToken cancellationToken) =>
         ValidateRelease(pageDatabaseContext: pageDatabaseContext, pageId: pageId, cancellationToken: cancellationToken);
-
-    private static void ValidateGeneratedValue(PageDatabaseContext pageDatabaseContext, CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken)
-    {
-        ValidateMutation(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken);
-
-        if (kind == CatalogGeneratedAlwaysKind.None || !Enum.IsDefined(value: kind))
-        {
-            throw new ArgumentOutOfRangeException(paramName: nameof(kind));
-        }
-    }
 
     private static void ValidatePageInspection(PageDatabaseContext pageDatabaseContext, ulong pageId, ReadOnlyMemory<byte> source)
     {

@@ -7,14 +7,12 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Pages;
-using sql_storage_engine.Models.Rows;
 using sql_storage_engine.Models.Identifiers;
-using sql_storage_engine.Rows;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Storage;
-using sql_storage_engine.Catalog;
 using sql_storage_engine.Services.Foundations.PageFileSessions;
 using sql_storage_engine.Services.Foundations.PageHeaders;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Orchestrations.PageDatabaseAllocations;
 internal sealed partial class PageDatabaseContextAllocationOrchestrationService(PageFileSessionService files, PageHeaderService headers) : IPageDatabaseContextAllocationOrchestrationService
@@ -67,81 +65,6 @@ internal sealed partial class PageDatabaseContextAllocationOrchestrationService(
 
         return pageDatabaseContext;
     });
-
-    public PageDatabaseContext AllocatePageDatabaseContextRowVersion(PageDatabaseContext pageDatabaseContext, CancellationToken cancellationToken) =>
-        TryCatch(operation: () =>
-    {
-        ValidateMutation(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken);
-
-        return pageDatabaseContext with
-        {
-            ResultValue = AllocateRowVersionAsyncCore(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
-        };
-    });
-
-    public PageDatabaseContext AllocatePageDatabaseContextGeneratedValue(PageDatabaseContext pageDatabaseContext, CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken) =>
-        TryCatch(operation: () =>
-    {
-        ValidateGeneratedValue(pageDatabaseContext: pageDatabaseContext, kind: kind, cancellationToken: cancellationToken);
-
-        return pageDatabaseContext with
-        {
-            ResultValue = AllocateGeneratedValueAsyncCore(pageDatabaseContext: pageDatabaseContext, kind: kind, cancellationToken: cancellationToken)
-        };
-    });
-
-    private SqlValue AllocateRowVersionAsyncCore(PageDatabaseContext pageDatabaseContext, CancellationToken cancellationToken = default)
-    {
-        {
-            ThrowIfDisposed(pageDatabaseContext: pageDatabaseContext);
-
-            if (pageDatabaseContext.Runtime!.OpenMode == DatabaseOpenMode.ReadOnly)
-            {
-                throw new InvalidOperationException(message: "Read-only databases cannot allocate rowversion values.");
-            }
-
-            var value = pageDatabaseContext.Runtime!.Header!.NextRowVersion;
-
-            pageDatabaseContext.Runtime!.Header = pageDatabaseContext.Runtime!.Header!with
-            {
-                NextRowVersion = checked(value + 1)
-            };
-
-            Span<byte> bytes = stackalloc byte[8];
-            BinaryPrimitives.WriteUInt64BigEndian(destination: bytes, value: value);
-            return CreateBinarySqlValue(value: bytes);
-        }
-    }
-
-    private SqlValue AllocateGeneratedValueAsyncCore(PageDatabaseContext pageDatabaseContext, Catalog.CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken = default)
-    {
-        if (kind == Catalog.CatalogGeneratedAlwaysKind.RowStart)
-        {
-            return CreateDateTimeSqlValue(value: new DateTime(ticks: DateTime.UtcNow.Ticks, kind: DateTimeKind.Unspecified));
-        }
-
-        if (kind == Catalog.CatalogGeneratedAlwaysKind.RowEnd)
-        {
-            return CreateDateTimeSqlValue(value: DateTime.MaxValue);
-        }
-
-        if (kind == Catalog.CatalogGeneratedAlwaysKind.None)
-        {
-            throw new ArgumentOutOfRangeException(paramName: nameof(kind));
-        }
-
-        {
-            ThrowIfDisposed(pageDatabaseContext: pageDatabaseContext);
-            var value = pageDatabaseContext.Runtime!.Header!.NextGeneratedSequence;
-
-            pageDatabaseContext.Runtime!.Header = pageDatabaseContext.Runtime!.Header!with
-            {
-                NextGeneratedSequence = checked(value + 1)
-            };
-
-            return CreateIntegerSqlValue(value: checked((long)value));
-        }
-    }
 
     private async ValueTask<PageId> AllocateAsyncCore(PageDatabaseContext pageDatabaseContext, PageType pageType, CancellationToken cancellationToken = default)
     {
@@ -313,27 +236,6 @@ internal sealed partial class PageDatabaseContextAllocationOrchestrationService(
 
     private ValueTask WritePageAsync(PageDatabaseContext pageDatabaseContext, PageId pageId, ReadOnlyMemory<byte> source, CancellationToken cancellationToken) =>
         files.WritePageFileSessionAsync(pageFileSession: pageDatabaseContext.Runtime!.Session!, pageId: pageId.Value, source: source, cancellationToken: cancellationToken);
-
-    private static SqlValue CreateBinarySqlValue(ReadOnlySpan<byte> value) =>
-        new BinarySqlValue
-    {
-        StorageFamily = SqlStorageFamily.Binary,
-        Content = sql_storage_engine.Brokers.BinaryPayloads.BinaryPayloadBroker.ReadBinaryContent(bytes: value)
-    };
-
-    private static SqlValue CreateDateTimeSqlValue(DateTime value) =>
-        new DateTimeSqlValue
-    {
-        StorageFamily = SqlStorageFamily.DateTime,
-        Value = DateTime.SpecifyKind(value: value, kind: DateTimeKind.Unspecified)
-    };
-
-    private static SqlValue CreateIntegerSqlValue(long value) =>
-        new IntegerSqlValue
-    {
-        StorageFamily = SqlStorageFamily.Integer,
-        Value = value
-    };
 
     internal static PageDatabaseContextAllocationOrchestrationService CreatePageDatabaseContextAllocationOrchestrationService() =>
         new PageDatabaseContextAllocationOrchestrationService(files: PageFileSessionService.CreatePageFileSessionService(), headers: new PageHeaderService());

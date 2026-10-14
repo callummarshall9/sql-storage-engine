@@ -86,22 +86,6 @@ internal sealed partial class EngineLifecycleResourceCoordinationService : IEngi
         return access.RegisterScopeEngineResourceContext(engineResourceContext: engineResourceContext);
     });
 
-    public ValueTask<EngineResourceContext> EnterSecurityEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken) =>
-        TryCatch<EngineResourceContext>(operation: async () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
-
-        return await access.EnterSecurityEngineResourceContextAsync(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-    });
-
-    public EngineResourceContext ReleaseSecurityEngineResourceContext(EngineResourceContext engineResourceContext) =>
-        TryCatch<EngineResourceContext>(operation: () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext);
-        return access.ReleaseSecurityEngineResourceContext(engineResourceContext: engineResourceContext);
-    });
-
     public EngineResourceContext OpenBufferEngineResourceContext(EngineResourceContext engineResourceContext) =>
         TryCatch<EngineResourceContext>(operation: () =>
     {

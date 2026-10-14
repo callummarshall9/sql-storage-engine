@@ -19,6 +19,4 @@ public static class PageHeaderExposure
     public static void CheckPageHeader(PageHeader pageHeader, ulong expectedPageId, PageType? expectedType = null) =>
         service.CheckPageHeader(pageHeader: pageHeader, expectedPageId: expectedPageId, expectedType: expectedType);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadPageHeader(source: source.Span);
 }

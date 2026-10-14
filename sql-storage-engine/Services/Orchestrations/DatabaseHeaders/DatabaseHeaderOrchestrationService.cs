@@ -9,7 +9,7 @@ using sql_storage_engine.Services.Processings.DatabasePages;
 namespace sql_storage_engine.Services.Orchestrations.DatabaseHeaders;
 internal sealed partial class DatabaseHeaderOrchestrationService : IDatabaseHeaderOrchestrationService
 {
-    private static readonly ISqlCollationDatabaseHeaderProcessingService metadata = new SqlCollationDatabaseHeaderProcessingService();
+    private static readonly IDatabaseHeaderMetadataProcessingService metadata = new DatabaseHeaderMetadataProcessingService();
     private static readonly IPageHeaderDatabasePageProcessingService pages = new PageHeaderDatabasePageProcessingService();
     public void WriteDatabaseHeader(Span<byte> page, DatabaseHeader databaseHeader) =>
         TryCatch(operation: static context =>

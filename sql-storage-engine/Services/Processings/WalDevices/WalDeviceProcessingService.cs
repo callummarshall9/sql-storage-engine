@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using sql_storage_engine.Models.Logging;
 using sql_storage_engine.Services.Foundations.WalDevices;
 
+using sql_storage_engine.Storage;
+
 namespace sql_storage_engine.Services.Processings.WalDevices;
 internal sealed partial class WalDeviceProcessingService(WalDeviceService device) : IWalDeviceProcessingService
 {

@@ -6,12 +6,13 @@ using System.Buffers;
 using System.Buffers.Binary;
 using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Storage;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Pages;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Orchestrations.CatalogPages;
 /// <summary>Persists and traverses a bounded chain of bootstrap catalog pages.</summary>

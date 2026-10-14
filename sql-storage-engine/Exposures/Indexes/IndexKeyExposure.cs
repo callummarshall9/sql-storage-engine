@@ -23,6 +23,4 @@ public static class IndexKeyExposure
     public static void CheckIndexKey(sql_storage_engine.Models.Indexes.IndexKey indexKey) =>
         service.CheckIndexKey(indexKey: indexKey);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.CreateIndexKey(bytes: source.Span);
 }

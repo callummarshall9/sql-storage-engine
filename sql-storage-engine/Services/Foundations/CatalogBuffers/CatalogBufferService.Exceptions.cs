@@ -6,6 +6,8 @@ using System;
 using System.IO;
 using sql_storage_engine.Models.Exceptions;
 
+using sql_storage_engine.Storage;
+
 namespace sql_storage_engine.Services.Foundations.CatalogBuffers;
 internal sealed partial class CatalogBufferService
 {

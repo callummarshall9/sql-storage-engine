@@ -3,8 +3,9 @@
 // ---------------------------------------------------------------
 using System;
 using sql_storage_engine.Models.Heap;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Models.Exceptions;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Orchestrations.HeapPageLayouts;
 internal sealed partial class HeapPageLayoutOrchestrationService

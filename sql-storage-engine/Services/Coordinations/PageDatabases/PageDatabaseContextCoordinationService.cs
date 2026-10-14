@@ -7,11 +7,10 @@ using System.Threading.Tasks;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Catalog;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Services.Orchestrations.PageDatabaseFiles;
 using sql_storage_engine.Services.Orchestrations.PageDatabaseAllocations;
 using sql_storage_engine.Services.Orchestrations.DatabaseHeaders;
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Coordinations.PageDatabases;
 internal sealed partial class PageDatabaseContextCoordinationService(PageDatabaseContextFileOrchestrationService lifecycle, PageDatabaseContextAllocationOrchestrationService allocations, DatabaseHeaderOrchestrationService headers) : IPageDatabaseContextCoordinationService
@@ -32,26 +31,11 @@ internal sealed partial class PageDatabaseContextCoordinationService(PageDatabas
                 },
                 PageSize = prepared.PageSize,
                 FormatVersion = DatabaseHeaderFormat.CurrentVersion,
-                NextTableId = new TableId
-                {
-                    Value = 1
-                },
-                NextIndexId = new IndexId
-                {
-                    Value = 1
-                },
-                NextTransactionId = new TransactionId
-                {
-                    Value = 1
-                },
                 NextPageId = new PageId
                 {
                     Value = 1
                 },
-                IsCleanShutdown = true,
-                DefaultCollation = prepared.DefaultCollation!,
-                NextRowVersion = 1,
-                NextGeneratedSequence = 1
+                IsCleanShutdown = true
             };
 
             var page = new byte[prepared.PageSize];
@@ -199,55 +183,6 @@ internal sealed partial class PageDatabaseContextCoordinationService(PageDatabas
 
             await PersistHeaderAsync(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
-        }
-        finally
-        {
-            lifecycle.ExitPageDatabaseContextFile(pageDatabaseContext: pageDatabaseContext);
-        }
-    });
-
-    public ValueTask<PageDatabaseContext> AllocatePageDatabaseContextRowVersionAsync(PageDatabaseContext pageDatabaseContext, CancellationToken cancellationToken) =>
-        TryCatch(operation: async () =>
-    {
-        ValidateMutation(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken);
-
-        await lifecycle.EnterPageDatabaseContextFileAsync(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-
-        try
-        {
-            var result = allocations.AllocatePageDatabaseContextRowVersion(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken);
-
-            await PersistHeaderAsync(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-
-            return result;
-        }
-        finally
-        {
-            lifecycle.ExitPageDatabaseContextFile(pageDatabaseContext: pageDatabaseContext);
-        }
-    });
-
-    public ValueTask<PageDatabaseContext> AllocatePageDatabaseContextGeneratedValueAsync(PageDatabaseContext pageDatabaseContext, CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken) =>
-        TryCatch(operation: async () =>
-    {
-        ValidateGeneratedValue(pageDatabaseContext: pageDatabaseContext, kind: kind, cancellationToken: cancellationToken);
-
-        await lifecycle.EnterPageDatabaseContextFileAsync(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-
-        try
-        {
-            var result = allocations.AllocatePageDatabaseContextGeneratedValue(pageDatabaseContext: pageDatabaseContext, kind: kind, cancellationToken: cancellationToken);
-
-            if (kind is not (CatalogGeneratedAlwaysKind.RowStart or CatalogGeneratedAlwaysKind.RowEnd))
-            {
-                await PersistHeaderAsync(pageDatabaseContext: pageDatabaseContext, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-            }
-
-            return result;
         }
         finally
         {

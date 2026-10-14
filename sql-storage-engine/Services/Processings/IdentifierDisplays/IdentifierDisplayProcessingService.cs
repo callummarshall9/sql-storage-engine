@@ -15,7 +15,6 @@ internal sealed partial class IdentifierDisplayProcessingService : IIdentifierDi
         return FormattableString.Invariant(formattable: identifierDisplay.Kind switch
         {
             IdentifierDisplayKind.Database => $"database:{identifierDisplay.DatabaseValue:D}",
-            IdentifierDisplayKind.Column => $"column:{identifierDisplay.Value}",
             IdentifierDisplayKind.Page => $"page:{identifierDisplay.Value}",
             IdentifierDisplayKind.Table => $"table:{identifierDisplay.Value}",
             IdentifierDisplayKind.Index => $"index:{identifierDisplay.Value}",

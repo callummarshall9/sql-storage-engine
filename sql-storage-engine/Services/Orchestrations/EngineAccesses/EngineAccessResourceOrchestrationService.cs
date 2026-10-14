@@ -11,17 +11,15 @@ internal sealed partial class EngineAccessResourceOrchestrationService : IEngine
 {
     private readonly sql_storage_engine.Services.Foundations.TransactionRuntimes.TransactionRuntimeService runtime = new();
     private readonly sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService access;
-    private readonly sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService security;
     private sql_storage_engine.Services.Foundations.FileLeases.StorageFileLeaseService? files;
-    private EngineAccessResourceOrchestrationService(sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService access, sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService security, sql_storage_engine.Services.Foundations.FileLeases.StorageFileLeaseService files)
+    private EngineAccessResourceOrchestrationService(sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService access, sql_storage_engine.Services.Foundations.FileLeases.StorageFileLeaseService files)
     {
         this.access = access;
-        this.security = security;
         this.files = files;
     }
 
     internal static EngineAccessResourceOrchestrationService CreateEngineAccessResourceOrchestrationService() =>
-        new(access: new sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService(), security: new sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService(), files: null!);
+        new(access: new sql_storage_engine.Services.Foundations.StorageAccesses.StorageAccessService(), files: null!);
 
     public EngineResourceContext AcquireEngineResourceContextFile(EngineResourceContext engineResourceContext) =>
         TryCatch<EngineResourceContext>(operation: () =>
@@ -118,26 +116,4 @@ internal sealed partial class EngineAccessResourceOrchestrationService : IEngine
         return engineResourceContext;
     });
 
-    public ValueTask<EngineResourceContext> EnterSecurityEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken) =>
-        TryCatch<EngineResourceContext>(operation: async () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
-
-        var entered = await security.EnterStorageAccessAsync(storageAccess: null, token: cancellationToken, reentrant: false)
-            .ConfigureAwait(continueOnCapturedContext: false);
-
-        return engineResourceContext with
-        {
-            SecurityAccess = entered,
-            SecurityLifetime = security.ReadStorageAccessLifetime(storageAccess: entered)
-        };
-    });
-
-    public EngineResourceContext ReleaseSecurityEngineResourceContext(EngineResourceContext engineResourceContext) =>
-        TryCatch<EngineResourceContext>(operation: () =>
-    {
-        ValidateRequest(engineResourceContext: engineResourceContext);
-        security.CloseStorageAccess(storageAccess: engineResourceContext.SecurityAccess);
-        return engineResourceContext;
-    });
 }

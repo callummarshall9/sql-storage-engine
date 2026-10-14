@@ -4,8 +4,9 @@
 using sql_storage_engine.Backup;
 using sql_storage_engine.Models.Backup;
 using sql_storage_engine.Models.Logging;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Services.Foundations.WalSegmentHeaders;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Processings.BackupSegments;
 internal sealed partial class WalSegmentHeaderBackupFileContextProcessingService : IWalSegmentHeaderBackupFileContextProcessingService

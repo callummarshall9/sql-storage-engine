@@ -18,9 +18,7 @@ internal sealed record EngineResourceContext
     public BufferPoolConfiguration? BufferConfiguration { get; set; }
     public object? BufferSource { get; set; }
     public StorageAccess? Access { get; set; }
-    public StorageAccess? SecurityAccess { get; set; }
     public IDisposable? Lifetime { get; set; }
-    public IDisposable? SecurityLifetime { get; set; }
     public IAsyncDisposable? ScopeResource { get; init; }
     public StorageFileLeaseConfiguration? FileLeaseConfiguration { get; init; }
     public StatementJournalState? Journal { get; set; }
@@ -32,7 +30,6 @@ internal sealed record EngineResourceContext
     public bool Retain { get; init; }
     public int PageSize { get; init; }
     public int BufferCapacity { get; init; }
-    public string? DefaultCollation { get; init; }
     public long? MaximumLength { get; init; }
     public long Length { get; init; }
     public ulong PageId { get; init; }
@@ -49,9 +46,7 @@ internal sealed record EngineResourceContext
     public Func<CancellationToken, ValueTask>? ReloadHeader { get; init; }
     public object? StreamSource { get; set; }
     public sql_storage_engine.Models.Catalog.CatalogStorageConfiguration? CatalogStorage { get; set; }
-    public sql_storage_engine.Models.Rows.RowEncodingConfiguration? Rows { get; set; }
     public sql_storage_engine.Models.Overflow.OverflowPageResourceConfiguration? OverflowConfiguration { get; set; }
-    public int InlineValueThreshold { get; init; }
     public Func<ulong, CancellationToken, ValueTask<(IDisposable Lease, Memory<byte> Memory, Action<ulong> MarkDirty)>>? PinSource { get; set; }
     public Func<ulong, CancellationToken, ValueTask>? DiscardSource { get; set; }
     public Func<CancellationToken, ValueTask>? BufferFlushSource { get; set; }

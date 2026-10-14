@@ -26,9 +26,7 @@ internal interface IEngineLifecycleResourceCoordinationService
 
     EngineResourceContext RegisterScopeEngineResourceContext(EngineResourceContext engineResourceContext);
 
-    ValueTask<EngineResourceContext> EnterSecurityEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken);
 
-    EngineResourceContext ReleaseSecurityEngineResourceContext(EngineResourceContext engineResourceContext);
 
     EngineResourceContext OpenBufferEngineResourceContext(EngineResourceContext engineResourceContext);
 

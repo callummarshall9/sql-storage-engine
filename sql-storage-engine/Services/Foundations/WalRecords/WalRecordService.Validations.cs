@@ -5,6 +5,7 @@ using System;
 using System.Buffers.Binary;
 using sql_storage_engine.Models.Logging;
 using sql_storage_engine.Logging;
+
 using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Foundations.WalRecords;

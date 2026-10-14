@@ -13,6 +13,4 @@ public static class WalReadResultExposure
     public static WalReadResult ReadWalReadResult(ReadOnlySpan<byte> source) =>
         service.ReadWalReadResult(source: source);
 
-    public static void DecodeFuzzInput(System.ReadOnlyMemory<byte> source) =>
-        service.ReadWalReadResult(source: source.Span);
 }

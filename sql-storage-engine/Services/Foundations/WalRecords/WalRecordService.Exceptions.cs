@@ -4,8 +4,9 @@
 using System;
 using System.IO;
 using sql_storage_engine.Models.Logging;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Models.Exceptions;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Foundations.WalRecords;
 internal sealed partial class WalRecordService

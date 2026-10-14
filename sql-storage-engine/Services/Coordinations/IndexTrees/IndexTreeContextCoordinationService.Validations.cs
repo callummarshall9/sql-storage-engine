@@ -56,7 +56,6 @@ internal sealed partial class IndexTreeContextCoordinationService
     private static void ValidateBinding(IndexTreeContext indexTreeContext)
     {
         ArgumentNullException.ThrowIfNull(argument: indexTreeContext);
-        ArgumentNullException.ThrowIfNull(argument: indexTreeContext.Definition);
         Validate(inputs: [(indexTreeContext.AddCount < 0, nameof(indexTreeContext.AddCount)), (indexTreeContext.RemoveCount < 0, nameof(indexTreeContext.RemoveCount))]);
     }
 

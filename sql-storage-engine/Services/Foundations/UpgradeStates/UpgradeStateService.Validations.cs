@@ -4,6 +4,8 @@
 using System;
 using sql_storage_engine.Models.Diagnostics;
 
+using sql_storage_engine.Storage;
+
 namespace sql_storage_engine.Services.Foundations.UpgradeStates;
 internal sealed partial class UpgradeStateService
 {

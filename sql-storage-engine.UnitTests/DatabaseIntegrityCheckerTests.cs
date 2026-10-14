@@ -73,26 +73,11 @@ public sealed class DatabaseIntegrityCheckerTests
         FormatVersion = sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion,
         CatalogRootPageId = null,
         FreeListHeadPageId = null,
-        NextTableId = new sql_storage_engine.Models.Identifiers.TableId
-        {
-            Value = 1
-        },
-        NextIndexId = new sql_storage_engine.Models.Identifiers.IndexId
-        {
-            Value = 1
-        },
-        NextTransactionId = new sql_storage_engine.Models.Identifiers.TransactionId
-        {
-            Value = 1
-        },
         NextPageId = new sql_storage_engine.Models.Identifiers.PageId
         {
             Value = next
         },
-        IsCleanShutdown = true,
-        NextRowVersion = 1,
-        DefaultCollation = "SQL_Latin1_General_CP1_CI_AS",
-        NextGeneratedSequence = 1
+        IsCleanShutdown = true
     };
     private static RowId Row(ulong page) => new sql_storage_engine.Models.Identifiers.RowId
     {

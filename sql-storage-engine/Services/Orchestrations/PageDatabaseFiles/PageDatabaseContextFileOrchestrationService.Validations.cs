@@ -65,7 +65,6 @@ internal sealed partial class PageDatabaseContextFileOrchestrationService
     {
         ArgumentNullException.ThrowIfNull(argument: pageDatabaseContext);
         ArgumentException.ThrowIfNullOrWhiteSpace(argument: pageDatabaseContext.Path);
-        ArgumentException.ThrowIfNullOrWhiteSpace(argument: pageDatabaseContext.DefaultCollation);
 
         if (!Enum.IsDefined(value: (PageSize)pageDatabaseContext.PageSize))
         {

@@ -40,6 +40,29 @@ public sealed class DatabaseHeaderTests
         ((Action)(() => sql_storage_engine.Exposures.Pages.DatabaseHeaderExposure.ReadDatabaseHeader(page))).Should().Throw<UnsupportedDatabaseVersionException>();
     }
 
+    [Test]
+    public void Codec_RejectsLegacySemanticHeaderVersion()
+    {
+        var page = new byte[sql_storage_engine.Models.Pages.PageConstants.DefaultSize];
+        sql_storage_engine.Exposures.Pages.DatabaseHeaderExposure.WriteDatabaseHeader(page, Header());
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(page.AsSpan(sql_storage_engine.Models.Pages.DatabaseHeaderFormat.PayloadOffset + 24), 4);
+        ((Action)(() => sql_storage_engine.Exposures.Pages.DatabaseHeaderExposure.ReadDatabaseHeader(page))).Should().Throw<UnsupportedDatabaseVersionException>();
+    }
+
+    [TestCase(50)]
+    [TestCase(58)]
+    [TestCase(66)]
+    [TestCase(82)]
+    [TestCase(90)]
+    [TestCase(220)]
+    public void Codec_RejectsNonzeroReservedMetadata(int offset)
+    {
+        var page = new byte[sql_storage_engine.Models.Pages.PageConstants.DefaultSize];
+        sql_storage_engine.Exposures.Pages.DatabaseHeaderExposure.WriteDatabaseHeader(page, Header());
+        page[sql_storage_engine.Models.Pages.DatabaseHeaderFormat.PayloadOffset + offset] = 1;
+        ((Action)(() => sql_storage_engine.Exposures.Pages.DatabaseHeaderExposure.ReadDatabaseHeader(page))).Should().Throw<StorageFormatException>();
+    }
+
     private static DatabaseHeader Header() => new sql_storage_engine.Models.Pages.DatabaseHeader
     {
         DatabaseId = new sql_storage_engine.Models.Identifiers.DatabaseId
@@ -53,25 +76,10 @@ public sealed class DatabaseHeaderTests
             Value = 1
         },
         FreeListHeadPageId = null,
-        NextTableId = new sql_storage_engine.Models.Identifiers.TableId
-        {
-            Value = 2
-        },
-        NextIndexId = new sql_storage_engine.Models.Identifiers.IndexId
-        {
-            Value = 3
-        },
-        NextTransactionId = new sql_storage_engine.Models.Identifiers.TransactionId
-        {
-            Value = 4
-        },
         NextPageId = new sql_storage_engine.Models.Identifiers.PageId
         {
             Value = 5
         },
-        IsCleanShutdown = true,
-        NextRowVersion = 1,
-        DefaultCollation = "SQL_Latin1_General_CP1_CI_AS",
-        NextGeneratedSequence = 1
+        IsCleanShutdown = true
     };
 }

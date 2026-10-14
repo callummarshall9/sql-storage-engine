@@ -20,7 +20,6 @@ internal sealed record IndexTreeContext
     public IReadOnlyList<LeafIndexEntry>? Entries { get; set; }
     public IReadOnlyList<PageId>? PageIds { get; set; }
     public IAsyncEnumerable<LeafIndexEntry>? Rows { get; set; }
-    public sql_storage_engine.Models.Catalog.CatalogIndex? Definition { get; set; }
     public int AddCount { get; set; }
     public int RemoveCount { get; set; }
     public IndexTreeContext? Binding { get; set; }

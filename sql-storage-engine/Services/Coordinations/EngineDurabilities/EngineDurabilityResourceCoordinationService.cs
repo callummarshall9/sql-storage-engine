@@ -7,8 +7,9 @@ using System.Threading.Tasks;
 using sql_storage_engine.Models.Storage;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Models;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Models.Exceptions;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Coordinations.EngineDurabilities;
 internal sealed partial class EngineDurabilityResourceCoordinationService : IEngineDurabilityResourceCoordinationService
@@ -297,15 +298,7 @@ internal sealed partial class EngineDurabilityResourceCoordinationService : IEng
         ValidateRequest(engineResourceContext: engineResourceContext);
         overflow = sql_storage_engine.Services.Orchestrations.OverflowChains.OverflowChainContextOrchestrationService.CreateOverflowChainContextOrchestrationService(overflowPageResourceConfiguration: engineResourceContext.OverflowConfiguration!);
 
-        return engineResourceContext with
-        {
-            Rows = new sql_storage_engine.Models.Rows.RowEncodingConfiguration
-            {
-                OverflowService = overflow,
-                UseOverflow = true,
-                InlineThreshold = engineResourceContext.InlineValueThreshold
-            }
-        };
+        return engineResourceContext;
     });
 
     public EngineResourceContext GenerateSavepointPathEngineResourceContext(EngineResourceContext engineResourceContext) =>

@@ -2,12 +2,10 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using AwesomeAssertions;
-using sql_storage_engine.Exposures.Rows;
-using sql_storage_engine.Models.Identifiers;
-using sql_storage_engine.Models.Rows;
 using sql_storage_engine.Models.Storage;
 using sql_storage_engine.Services.Managements.EngineResources;
-using sql_storage_engine.Services.Managements.RowCodecs;
+using sql_storage_engine.Models.Overflow;
+using sql_storage_engine.Services.Orchestrations.OverflowChains;
 
 namespace sql_storage_engine.UnitTests;
 public sealed class EngineResourceArchitectureTests
@@ -21,22 +19,18 @@ public sealed class EngineResourceArchitectureTests
         EngineResourceContext? opened = null;
         try
         {
-            opened = await resources.CreateEngineResourceContextAsync(new EngineResourceContext { Path = Path.Combine(directory, "database.db"), PageSize = 8192, BufferCapacity = 4, DefaultCollation = "SQL_Latin1_General_CP1_CI_AS", InlineValueThreshold = 32 }, CancellationToken.None);
+            opened = await resources.CreateEngineResourceContextAsync(new EngineResourceContext { Path = Path.Combine(directory, "database.db"), PageSize = 8192, BufferCapacity = 4 }, CancellationToken.None);
             opened.Header.Should().NotBeNull();
             opened.DatabaseBinding.Should().NotBeNull();
             opened.CatalogStorage.Should().NotBeNull();
-            var codecs = RowCodecContextManagementService.CreateRowCodecContextManagementService(opened.Rows!);
-            var definition = TableDefinitionExposure.CreateTableDefinition([ColumnDefinitionExposure.CreateColumnDefinition(new ColumnId { Value = 1 }, "payload", SqlTypeExposure.CreateVarCharMaxSqlType(), false)]);
-            var text = new string('x', 12000);
-            var row = RowExposure.CreateRow([SqlValueExposure.CreateTextSqlValue(text)]);
-            var encoded = await codecs.ProcessRowEncodingContextEncodeAsync(new RowEncodingContext { Table = definition, Row = row }, CancellationToken.None);
-            encoded.EncodingResult!.NewlyAllocated.Should().HaveCount(1);
-            var decoded = await codecs.ProcessRowEncodingContextDecodeAsync(new RowEncodingContext { Table = definition, Source = encoded.EncodingResult.Bytes }, CancellationToken.None);
-            ((TextSqlValue)decoded.Row!.Values[0]).Value.Should().Be(text);
-            foreach (var reference in encoded.EncodingResult.NewlyAllocated)
-            {
-                await codecs.FreeRowEncodingContextOverflowAsync(new RowEncodingContext { Reference = reference }, CancellationToken.None);
-            }
+            var overflows = OverflowChainContextOrchestrationService.CreateOverflowChainContextOrchestrationService(opened.OverflowConfiguration!);
+            var payload = new byte[12000];
+            new Random(42).NextBytes(payload);
+            var encoded = await overflows.WriteOverflowChainContextAsync(new OverflowChainContext { Value = payload }, CancellationToken.None);
+            encoded.Reference.Should().NotBeNull();
+            var decoded = await overflows.ReadOverflowChainContextAsync(new OverflowChainContext { Reference = encoded.Reference }, CancellationToken.None);
+            decoded.Value.ToArray().Should().Equal(payload);
+            await overflows.FreeOverflowChainContextAsync(new OverflowChainContext { Reference = encoded.Reference }, CancellationToken.None);
             await resources.FlushBufferEngineResourceContextAsync(opened, CancellationToken.None);
             await resources.DiscardBufferEngineResourceContextAsync(opened, CancellationToken.None);
         }

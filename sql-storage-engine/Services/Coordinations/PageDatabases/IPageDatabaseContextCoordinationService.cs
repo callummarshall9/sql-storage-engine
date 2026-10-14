@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Pages;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Catalog;
 
 namespace sql_storage_engine.Services.Coordinations.PageDatabases;
 internal interface IPageDatabaseContextCoordinationService
@@ -34,10 +33,6 @@ internal interface IPageDatabaseContextCoordinationService
     ValueTask FreePageDatabaseContextAsync(PageDatabaseContext pageDatabaseContext, ulong pageId, CancellationToken cancellationToken);
 
     ValueTask PublishPageDatabaseContextCatalogAsync(PageDatabaseContext pageDatabaseContext, ulong pageId, CancellationToken cancellationToken);
-
-    ValueTask<PageDatabaseContext> AllocatePageDatabaseContextRowVersionAsync(PageDatabaseContext pageDatabaseContext, CancellationToken cancellationToken);
-
-    ValueTask<PageDatabaseContext> AllocatePageDatabaseContextGeneratedValueAsync(PageDatabaseContext pageDatabaseContext, CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken);
 
     ValueTask ClosePageDatabaseContextAsync(PageDatabaseContext pageDatabaseContext);
 

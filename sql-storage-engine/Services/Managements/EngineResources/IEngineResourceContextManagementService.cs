@@ -26,9 +26,7 @@ internal partial interface IEngineResourceContextManagementService
 
     EngineResourceContext RegisterScopeEngineResourceContext(EngineResourceContext engineResourceContext);
 
-    ValueTask<EngineResourceContext> EnterSecurityEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken);
 
-    EngineResourceContext ReleaseSecurityEngineResourceContext(EngineResourceContext engineResourceContext);
 
     ValueTask<EngineResourceContext> FlushBufferEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken);
 

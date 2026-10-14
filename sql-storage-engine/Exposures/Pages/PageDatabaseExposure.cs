@@ -6,10 +6,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using cCoder.CodeAnalysis.Exposures;
 using sql_storage_engine.Models.Pages;
-using sql_storage_engine.Models.Rows;
 using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Pages;
-using sql_storage_engine.Catalog;
 using sql_storage_engine.Brokers.PageFileSessions;
 using sql_storage_engine.Brokers.Directories;
 using sql_storage_engine.Services.Foundations.PageFileSessions;
@@ -35,8 +33,8 @@ public sealed class PageDatabaseExposure : IPageDatabaseExposure, sql_storage_en
         boundService = service;
     }
 
-    public static async Task<PageDatabaseExposure> CreatePageDatabaseExposureAsync(string path, int pageSize = PageConstants.DefaultSize, string defaultCollation = "SQL_Latin1_General_CP1_CI_AS", CancellationToken cancellationToken = default) =>
-        new PageDatabaseExposure(pageDatabaseContext: await service.CreatePageDatabaseContextAsync(pageDatabaseContext: new PageDatabaseContext { Path = path, PageSize = pageSize, DefaultCollation = defaultCollation, OpenMode = DatabaseOpenMode.Writer }, cancellationToken: cancellationToken)
+    public static async Task<PageDatabaseExposure> CreatePageDatabaseExposureAsync(string path, int pageSize = PageConstants.DefaultSize, CancellationToken cancellationToken = default) =>
+        new PageDatabaseExposure(pageDatabaseContext: await service.CreatePageDatabaseContextAsync(pageDatabaseContext: new PageDatabaseContext { Path = path, PageSize = pageSize, OpenMode = DatabaseOpenMode.Writer }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false));
 
     public static async Task<PageDatabaseExposure> OpenAsync(string path, CancellationToken cancellationToken = default) =>
@@ -87,16 +85,8 @@ public sealed class PageDatabaseExposure : IPageDatabaseExposure, sql_storage_en
     public ValueTask FreeAsync(PageId pageId, CancellationToken cancellationToken = default) =>
         boundService.FreePageDatabaseContextAsync(pageDatabaseContext: state, pageId: pageId.Value, cancellationToken: cancellationToken);
 
-    internal ValueTask PublishCatalogRootAsync(PageId pageId, CancellationToken cancellationToken = default) =>
+    public ValueTask PublishCatalogRootAsync(PageId pageId, CancellationToken cancellationToken = default) =>
         boundService.PublishPageDatabaseContextCatalogAsync(pageDatabaseContext: state, pageId: pageId.Value, cancellationToken: cancellationToken);
-
-    internal async ValueTask<SqlValue> AllocateRowVersionAsync(CancellationToken cancellationToken = default) =>
-        (await boundService.AllocatePageDatabaseContextRowVersionAsync(pageDatabaseContext: state, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false)).ResultValue!;
-
-    internal async ValueTask<SqlValue> AllocateGeneratedValueAsync(CatalogGeneratedAlwaysKind kind, CancellationToken cancellationToken = default) =>
-        (await boundService.AllocatePageDatabaseContextGeneratedValueAsync(pageDatabaseContext: state, kind: kind, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false)).ResultValue!;
 
     public ValueTask DisposeAsync() =>
         boundService.ClosePageDatabaseContextAsync(pageDatabaseContext: state);

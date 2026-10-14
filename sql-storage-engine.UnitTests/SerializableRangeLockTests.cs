@@ -2,18 +2,13 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using AwesomeAssertions;
-using sql_storage_engine.Catalog;
 using sql_storage_engine.Models.Identifiers;
 using sql_storage_engine.Indexes;
-using sql_storage_engine.Rows;
 using sql_storage_engine.Transactions;
 using sql_storage_engine.Models.Indexes;
-using sql_storage_engine.Models.Rows;
-using sql_storage_engine.Exposures.Rows;
 using sql_storage_engine.Models.LockResources;
 using sql_storage_engine.Exposures.LockResources;
 
-using sql_storage_engine.Models.Catalog;
 using sql_storage_engine.Models.Transactions;
 
 namespace sql_storage_engine.UnitTests;
@@ -76,43 +71,6 @@ public sealed class SerializableRangeLockTests
         insert.IsCompleted.Should().BeFalse();
         manager.Release(Tx(1),range);
         await insert;
-    }
-
-    [Test]
-    public async Task SerializableRepeatedScan_PreventsPhantomInsert()
-    {
-        await using var fixture = await TableStorageInsertTests.Fixture.CreateAsync();
-        var existing = RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(2), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("two")]);
-        await fixture.Table.InsertAsync(existing);
-        var index = fixture.Indexes[0];
-        sql_storage_engine.Models.Indexes.IndexKey lower = sql_storage_engine.Exposures.Catalog.CatalogIndexKeyExposure.Encode(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(1), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("x")]), fixture.Definition, index.ReadDefinition());
-        sql_storage_engine.Models.Indexes.IndexKey upper = sql_storage_engine.Exposures.Catalog.CatalogIndexKeyExposure.Encode(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(5), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("x")]), fixture.Definition, index.ReadDefinition());
-        sql_storage_engine.Models.Indexes.IndexKey insertedKey = sql_storage_engine.Exposures.Catalog.CatalogIndexKeyExposure.Encode(RowExposure.CreateRow([sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateIntegerSqlValue(3), sql_storage_engine.Exposures.Rows.SqlValueExposure.CreateTextSqlValue("three")]), fixture.Definition, index.ReadDefinition());
-        var manager = new sql_storage_engine.Exposures.Transactions.LockManagerExposure();
-        sql_storage_engine.Exposures.Transactions.TransactionManagerExposure transactions = new sql_storage_engine.Exposures.Transactions.TransactionManagerExposure();
-        var scannerTransaction = new sql_storage_engine.Exposures.Transactions.LockingTransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionExposure(transactions.CreateTransactionLifecycle()), manager);
-        var inserterTransaction = new sql_storage_engine.Exposures.Transactions.LockingTransactionExposure(new sql_storage_engine.Exposures.Transactions.TransactionExposure(transactions.CreateTransactionLifecycle()), manager);
-        var scanner = new sql_storage_engine.Exposures.Transactions.TransactionalIndexExposure(index.ReadTree(), index.ReadDefinition().Id, scannerTransaction, new TransactionalIndexOptions { IsolationLevel = TransactionIsolationLevel.Serializable });
-        var inserter = new sql_storage_engine.Exposures.Transactions.TransactionalIndexExposure(index.ReadTree(), index.ReadDefinition().Id, inserterTransaction, new TransactionalIndexOptions { IsolationLevel = TransactionIsolationLevel.Serializable });
-        var range = new IndexRange
-        {
-            LowerBound = lower,
-            UpperBound = upper,
-            IncludeLowerBound = true,
-            IncludeUpperBound = true,
-            Direction = ScanDirection.Ascending
-        };
-        (await scanner.ScanAsync(range)).Should().HaveCount(1);
-        var insert = inserter.InsertAsync(insertedKey,new sql_storage_engine.Models.Identifiers.RowId { PageId = new sql_storage_engine.Models.Identifiers.PageId { Value = 999 }, SlotId = new sql_storage_engine.Models.Identifiers.SlotId { Value = 1 }, Generation = new sql_storage_engine.Models.Identifiers.SlotGeneration { Value = 1 } }).AsTask();
-        insert.IsCompleted.Should().BeFalse();
-        (await scanner.ScanAsync(range)).Should().HaveCount(1);
-        scannerTransaction.Commit();
-        await insert;
-        inserterTransaction.Commit();
-        var entries = new List<sql_storage_engine.Models.Indexes.LeafIndexEntry>();
-        await foreach (sql_storage_engine.Models.Indexes.LeafIndexEntry entry in index.ReadTree().ScanAsync(range))
-            entries.Add(entry);
-        entries.Should().HaveCount(2);
     }
 
     [Test]

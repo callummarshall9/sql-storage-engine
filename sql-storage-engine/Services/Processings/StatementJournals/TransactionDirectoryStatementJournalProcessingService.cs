@@ -6,8 +6,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Buffers.Binary;
 using sql_storage_engine.Models.Transactions;
-using sql_storage_engine.Storage;
 using sql_storage_engine.Services.Foundations.TransactionDirectories;
+
+using sql_storage_engine.Storage;
 
 namespace sql_storage_engine.Services.Processings.StatementJournals;
 internal sealed partial class TransactionDirectoryStatementJournalProcessingService : ITransactionDirectoryStatementJournalProcessingService
