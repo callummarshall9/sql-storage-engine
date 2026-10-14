@@ -17,4 +17,15 @@ internal sealed partial class StorageTransactionReceiptRecoveryOrchestrationServ
         ValidateEngineResourceContext(engineResourceContext: engineResourceContext);
         cancellationToken.ThrowIfCancellationRequested();
     }
+
+    private static void ValidateEngineResourceMetadataContext(sql_storage_engine.Models.Storage.EngineResourceContext engineResourceContext, CancellationToken cancellationToken)
+    {
+        ValidateEngineResourceContext(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
+        ArgumentNullException.ThrowIfNull(argument: engineResourceContext.Metadata);
+
+        if (engineResourceContext.Metadata.State is not null)
+        {
+            throw new ArgumentException(message: "Active transaction metadata cannot contain a decision.");
+        }
+    }
 }

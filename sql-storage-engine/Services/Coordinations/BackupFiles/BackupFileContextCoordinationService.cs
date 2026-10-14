@@ -94,18 +94,18 @@ internal sealed partial class BackupFileContextCoordinationService : IBackupFile
         return files.RemoveDirectoryBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.SerializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.SerializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.DeserializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.DeserializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
     public ValueTask<BackupFileContext> ReadBytesBackupFileContextAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
@@ -228,7 +228,7 @@ internal sealed partial class BackupFileContextCoordinationService : IBackupFile
         return archives.ReadBackupFileContextArchive(backupFileContext: read);
     });
 
-    public ValueTask<BackupFileContext> ReadBackupFileContextValueAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
+    public ValueTask<BackupFileContext> ReadBackupFileContextTimelineAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
         TryCatch(operation: async () =>
     {
         ValidateBackupFileContextCancellation(backupFileContext: backupFileContext, cancellationToken: cancellationToken);
@@ -236,14 +236,14 @@ internal sealed partial class BackupFileContextCoordinationService : IBackupFile
         var read = await files.ReadBytesBackupFileContextAsync(backupFileContext: backupFileContext, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
 
-        return files.DeserializeValueBackupFileContext(backupFileContext: read);
+        return files.DeserializeTimelineBackupFileContext(backupFileContext: read);
     });
 
-    public ValueTask<BackupFileContext> WriteBackupFileContextValueAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
+    public ValueTask<BackupFileContext> WriteBackupFileContextTimelineAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
         TryCatch(operation: async () =>
     {
         ValidateBackupFileContextCancellation(backupFileContext: backupFileContext, cancellationToken: cancellationToken);
-        var encoded = files.SerializeValueBackupFileContext(backupFileContext: backupFileContext);
+        var encoded = files.SerializeTimelineBackupFileContext(backupFileContext: backupFileContext);
 
         return await files.WriteBytesBackupFileContextAsync(backupFileContext: encoded, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);

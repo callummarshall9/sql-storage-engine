@@ -146,9 +146,9 @@ internal sealed partial class StorageTransactionReceiptRecoveryOrchestrationServ
     public ValueTask<EngineResourceContext> WriteMetadataEngineResourceContextAsync(EngineResourceContext engineResourceContext, CancellationToken cancellationToken) =>
         TryCatch<EngineResourceContext>(operation: async () =>
     {
-        ValidateEngineResourceContext(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
+        ValidateEngineResourceMetadataContext(engineResourceContext: engineResourceContext, cancellationToken: cancellationToken);
 
-        await journals.WriteStatementJournalStateMetadataAsync(path: engineResourceContext.Path!, value: engineResourceContext.Metadata!, cancellationToken: cancellationToken)
+        await journals.WriteStatementJournalStateIdentityAsync(path: engineResourceContext.Path!, transactionId: engineResourceContext.Metadata!.Identity.Value, databaseId: engineResourceContext.Metadata.Identity.DatabaseId.Value, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
 
         return engineResourceContext;

@@ -76,7 +76,7 @@ public sealed class PointInTimeRestoreTests
         result.ReplayedThrough.Should().Be(new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 41 });
         result.CommittedTransactions.Should().Equal(new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 });
         result.Timeline.Should().Be(5);
-        File.Exists(Path.Combine(paths.Restore, "timeline.json")).Should().BeTrue();
+        File.Exists(Path.Combine(paths.Restore, "timeline.bin")).Should().BeTrue();
     }
 
     [Test]

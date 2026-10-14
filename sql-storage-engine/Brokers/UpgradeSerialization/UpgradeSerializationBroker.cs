@@ -2,20 +2,24 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using sql_storage_engine.Dependencies.UpgradeSerialization;
 
 namespace sql_storage_engine.Brokers.UpgradeSerialization;
 internal sealed class UpgradeSerializationBroker : IUpgradeSerializationBroker
 {
-    public byte[] Serialize<T>(T value)
+    public byte[] CalculateChecksum(ReadOnlySpan<byte> bytes)
     {
         using var serialization = new UpgradeSerializationDependency();
-        return serialization.Serialize(value: value);
+        return serialization.CalculateChecksum(bytes: bytes);
     }
 
-    public (T? Value, string? Error, Exception? Cause) TryDeserialize<T>(ReadOnlyMemory<byte> bytes)
+    public async ValueTask<(byte[]? Bytes, string? Error)> ReadBoundedAsync(string path, int expectedLength, CancellationToken cancellationToken)
     {
         using var serialization = new UpgradeSerializationDependency();
-        return serialization.TryDeserialize<T>(bytes: bytes);
+
+        return await serialization.ReadBoundedAsync(path: path, expectedLength: expectedLength, cancellationToken: cancellationToken)
+            .ConfigureAwait(continueOnCapturedContext: false);
     }
 }

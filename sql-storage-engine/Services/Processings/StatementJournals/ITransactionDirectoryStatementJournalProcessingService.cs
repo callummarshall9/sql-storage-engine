@@ -25,7 +25,7 @@ internal interface ITransactionDirectoryStatementJournalProcessingService
 
     ValueTask ReleaseStatementJournalStateAsync(StatementJournalState statementJournalState);
 
-    ValueTask WriteStatementJournalStateMetadataAsync<T>(string path, T value, CancellationToken cancellationToken);
+    ValueTask WriteStatementJournalStateIdentityAsync(string path, Guid transactionId, Guid databaseId, CancellationToken cancellationToken);
 
     ValueTask<(Guid Value, Guid DatabaseId)> ReadStatementJournalStateIdentityAsync(string path, CancellationToken cancellationToken);
 

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using cCoder.CodeAnalysis.Exposures;
 using sql_storage_engine.Models;
+using sql_storage_engine.Models.Transactions;
 using sql_storage_engine.Models.Storage;
 using sql_storage_engine.Services.Coordinations.EngineDurabilities;
 
@@ -24,9 +25,9 @@ internal sealed class StorageTransactionFilesExposure : ICompositionExposure
         service.ReadTransactionActivePathEngineResourceContext(engineResourceContext: new EngineResourceContext { Path = path })
             .TextResult!;
 
-    public static async ValueTask WriteAsync<T>(string path, T value, CancellationToken token)
+    public static async ValueTask WriteAsync(string path, StorageTransactionIdentity storageTransactionIdentity, CancellationToken token)
     {
-        _ = await service.WriteMetadataEngineResourceContextAsync(engineResourceContext: new EngineResourceContext { Path = path, Metadata = value }, cancellationToken: token)
+        _ = await service.WriteMetadataEngineResourceContextAsync(engineResourceContext: new EngineResourceContext { Path = path, Metadata = new TransactionMetadata { Identity = storageTransactionIdentity } }, cancellationToken: token)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 

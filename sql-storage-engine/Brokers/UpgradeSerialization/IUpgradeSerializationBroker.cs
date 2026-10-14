@@ -2,11 +2,13 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace sql_storage_engine.Brokers.UpgradeSerialization;
 internal interface IUpgradeSerializationBroker
 {
-    byte[] Serialize<T>(T value);
+    byte[] CalculateChecksum(ReadOnlySpan<byte> bytes);
 
-    (T? Value, string? Error, Exception? Cause) TryDeserialize<T>(ReadOnlyMemory<byte> bytes);
+    ValueTask<(byte[]? Bytes, string? Error)> ReadBoundedAsync(string path, int expectedLength, CancellationToken cancellationToken);
 }

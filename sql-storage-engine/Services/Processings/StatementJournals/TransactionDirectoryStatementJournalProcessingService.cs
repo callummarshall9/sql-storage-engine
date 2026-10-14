@@ -209,12 +209,12 @@ internal sealed partial class TransactionDirectoryStatementJournalProcessingServ
         return (state, bytes);
     }
 
-    public ValueTask WriteStatementJournalStateMetadataAsync<T>(string path, T value, CancellationToken cancellationToken) =>
+    public ValueTask WriteStatementJournalStateIdentityAsync(string path, Guid transactionId, Guid databaseId, CancellationToken cancellationToken) =>
         TryCatch(operation: async () =>
     {
-        ValidateStatementJournalMetadata(path: path, value: value, cancellationToken: cancellationToken);
+        ValidateStatementJournalMetadata(path: path, transactionId: transactionId, databaseId: databaseId, cancellationToken: cancellationToken);
 
-        await directories.WriteTransactionMetadataAsync(path: path, value: value, cancellationToken: cancellationToken)
+        await directories.WriteTransactionMetadataAsync(path: path, transactionMetadata: new TransactionMetadata { Identity = new sql_storage_engine.Models.StorageTransactionIdentity { DatabaseId = new sql_storage_engine.Models.Identifiers.DatabaseId { Value = databaseId }, Value = transactionId } }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     });
 
@@ -223,10 +223,10 @@ internal sealed partial class TransactionDirectoryStatementJournalProcessingServ
     {
         ValidateSnapshotPath(path: path, cancellationToken: cancellationToken);
 
-        var identity = await directories.GetTransactionMetadataAsync<sql_storage_engine.Models.StorageTransactionIdentity>(path: path, cancellationToken: cancellationToken)
+        var identity = await directories.ReadTransactionMetadataAsync(path: path, receipt: false, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
 
-        return (identity.Value, identity.DatabaseId.Value);
+        return (identity.Identity.Value, identity.Identity.DatabaseId.Value);
     });
 
     public bool CheckStatementJournalStateFile(string path) =>

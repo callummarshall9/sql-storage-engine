@@ -4,7 +4,6 @@
 using System;
 using System.ComponentModel;
 using System.IO;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
@@ -63,7 +62,7 @@ internal sealed partial class TransactionDirectoryDependency : IDisposable
     public bool FileExists(string path) =>
         File.Exists(path: path);
 
-    public async ValueTask WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
+    public async ValueTask WriteMetadataBytesAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
     {
         var temporary = path + $".{Guid.NewGuid():N}.tmp";
 
@@ -71,7 +70,7 @@ internal sealed partial class TransactionDirectoryDependency : IDisposable
         {
             file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous);
 
-            await JsonSerializer.SerializeAsync(utf8Json: file, value: value, cancellationToken: cancellationToken)
+            await file.WriteAsync(buffer: bytes, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
 
             file.Flush(flushToDisk: true);
@@ -82,10 +81,6 @@ internal sealed partial class TransactionDirectoryDependency : IDisposable
             file = null;
             File.Move(sourceFileName: temporary, destFileName: path, overwrite: true);
             FlushDirectory(path: path);
-        }
-        catch (JsonException exception)
-        {
-            throw new IOException(message: "Transaction metadata serialization failed.", innerException: exception);
         }
         finally
         {
@@ -104,23 +99,32 @@ internal sealed partial class TransactionDirectoryDependency : IDisposable
         }
     }
 
-    public async ValueTask<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
+    public async ValueTask<byte[]> ReadMetadataBytesAsync(string path, int length, CancellationToken cancellationToken)
     {
         file = File.OpenRead(path: path);
 
         try
         {
-            return await JsonSerializer.DeserializeAsync<T>(utf8Json: file, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-        }
-        catch (JsonException exception)
-        {
-            throw new IOException(message: "Transaction metadata is not valid JSON.", innerException: exception);
+            if (file.Length != length)
+            {
+                throw new IOException(message: "Transaction metadata length is invalid.");
+            }
+
+            var bytes = new byte[length];
+            await file.ReadExactlyAsync(buffer: bytes, cancellationToken: cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
+
+            if (file.ReadByte() != -1)
+            {
+                throw new IOException(message: "Transaction metadata contains trailing bytes.");
+            }
+
+            return bytes;
         }
         finally
         {
             await file.DisposeAsync()
-            .ConfigureAwait(continueOnCapturedContext: false);
+                .ConfigureAwait(continueOnCapturedContext: false);
 
             file = null;
         }

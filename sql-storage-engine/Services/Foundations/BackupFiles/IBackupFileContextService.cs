@@ -42,7 +42,7 @@ internal interface IBackupFileContextService
 
     BackupFileContext ReadEngineVersionBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 }

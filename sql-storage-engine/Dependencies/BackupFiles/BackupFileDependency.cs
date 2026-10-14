@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------
 using System;
 using System.IO;
-using System.Text.Json;
+using System.Text;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,10 +12,6 @@ namespace sql_storage_engine.Dependencies.BackupFiles;
 internal sealed class BackupFileDependency : TimeProvider
 {
     private readonly TimeProvider timeProvider;
-    private readonly JsonSerializerOptions options = new JsonSerializerOptions
-    {
-        WriteIndented = true
-    };
     public BackupFileDependency(TimeProvider? timeProvider)
     {
         this.timeProvider = timeProvider ?? TimeProvider.System;
@@ -62,20 +58,38 @@ internal sealed class BackupFileDependency : TimeProvider
         return timeProvider.GetUtcNow();
     }
 
-    public byte[] Serialize(object value, Type type)
-    {
-        return JsonSerializer.SerializeToUtf8Bytes(value: value, inputType: type, options: options);
-    }
+    public int CountUtf8Bytes(string value) =>
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetByteCount(chars: value);
 
-    public object? Deserialize(byte[] value, Type type)
-    {
-        return JsonSerializer.Deserialize(utf8Json: value, returnType: type, options: options);
-    }
+    public byte[] EncodeUtf8(string value) =>
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetBytes(s: value);
 
-    public async ValueTask<byte[]> ReadBytesAsync(string path, CancellationToken cancellationToken)
+    public string DecodeUtf8(byte[] bytes) =>
+        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes: bytes);
+
+    public byte[] HashBytes(byte[] bytes) =>
+        SHA256.HashData(source: bytes);
+
+    public async ValueTask<byte[]> ReadBytesAsync(string path, int maximumBytes, CancellationToken cancellationToken)
     {
-        return await File.ReadAllBytesAsync(path: path, cancellationToken: cancellationToken)
+        await using var stream = new FileStream(path: path, mode: FileMode.Open, access: FileAccess.Read, share: FileShare.Read, bufferSize: 81920, options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        if (stream.Length > maximumBytes)
+        {
+            throw new InvalidDataException(message: "Backup metadata exceeds the binary format limit.");
+        }
+
+        var bytes = new byte[checked((int)stream.Length)];
+
+        await stream.ReadExactlyAsync(buffer: bytes, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
+
+        if (stream.ReadByte() != -1)
+        {
+            throw new InvalidDataException(message: "Backup metadata changed while it was read.");
+        }
+
+        return bytes;
     }
 
     public async ValueTask WriteBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken)

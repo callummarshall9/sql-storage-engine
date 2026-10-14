@@ -28,9 +28,9 @@ internal interface IBackupFileContextCoordinationService
 
     BackupFileContext RemoveDirectoryBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 
     ValueTask<BackupFileContext> ReadBytesBackupFileContextAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
 
@@ -60,7 +60,7 @@ internal interface IBackupFileContextCoordinationService
 
     ValueTask<BackupFileContext> ReadBackupFileContextArchiveAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
 
-    ValueTask<BackupFileContext> ReadBackupFileContextValueAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
+    ValueTask<BackupFileContext> ReadBackupFileContextTimelineAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
 
-    ValueTask<BackupFileContext> WriteBackupFileContextValueAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
+    ValueTask<BackupFileContext> WriteBackupFileContextTimelineAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
 }

@@ -19,9 +19,8 @@ internal sealed record BackupFileContext
     public System.DateTimeOffset CreatedAt { get; init; }
     public ulong PageId { get; init; }
     public int PageSize { get; init; }
-    public object? ValueSource { get; init; }
-    public System.Type? ValueType { get; init; }
-    public object? ValueResult { get; init; }
+    public BackupConfiguration? Configuration { get; init; }
+    public BackupTimeline? Timeline { get; init; }
     public string? ExpectedSha256 { get; init; }
     public bool ChecksumMatches { get; init; }
     public BackupVerificationResult? Verification { get; init; }

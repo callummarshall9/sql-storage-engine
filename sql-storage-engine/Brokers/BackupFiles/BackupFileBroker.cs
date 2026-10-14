@@ -40,14 +40,20 @@ internal sealed class BackupFileBroker : IBackupFileBroker
     public DateTimeOffset ReadUtcNow() =>
         dependency.GetUtcNow();
 
-    public byte[] Serialize(object value, Type type) =>
-        dependency.Serialize(value: value, type: type);
+    public int CountUtf8Bytes(string value) =>
+        dependency.CountUtf8Bytes(value: value);
 
-    public object? Deserialize(byte[] value, Type type) =>
-        dependency.Deserialize(value: value, type: type);
+    public byte[] EncodeUtf8(string value) =>
+        dependency.EncodeUtf8(value: value);
 
-    public ValueTask<byte[]> ReadBytesAsync(string path, CancellationToken cancellationToken) =>
-        dependency.ReadBytesAsync(path: path, cancellationToken: cancellationToken);
+    public string DecodeUtf8(byte[] bytes) =>
+        dependency.DecodeUtf8(bytes: bytes);
+
+    public byte[] HashBytes(byte[] bytes) =>
+        dependency.HashBytes(bytes: bytes);
+
+    public ValueTask<byte[]> ReadBytesAsync(string path, int maximumBytes, CancellationToken cancellationToken) =>
+        dependency.ReadBytesAsync(path: path, maximumBytes: maximumBytes, cancellationToken: cancellationToken);
 
     public ValueTask WriteBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken) =>
         dependency.WriteBytesAsync(path: path, bytes: bytes, cancellationToken: cancellationToken);

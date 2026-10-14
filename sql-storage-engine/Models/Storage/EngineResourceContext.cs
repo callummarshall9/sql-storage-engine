@@ -37,7 +37,7 @@ internal sealed record EngineResourceContext
     public byte SnapshotState { get; set; }
     public Guid DatabaseIdentity { get; set; }
     public StorageTransactionReceipt? Receipt { get; set; }
-    public object? Metadata { get; init; }
+    public TransactionMetadata? Metadata { get; init; }
     public string? TextResult { get; set; }
     public bool Exists { get; set; }
     public Func<ulong, ReadOnlyMemory<byte>, CancellationToken, ValueTask>? WritePage { get; init; }

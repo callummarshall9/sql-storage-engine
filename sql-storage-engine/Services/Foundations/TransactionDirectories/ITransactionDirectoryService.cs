@@ -2,6 +2,7 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using System;
+using sql_storage_engine.Models.Transactions;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,9 +20,9 @@ internal interface ITransactionDirectoryService
 
     bool ExistsTransactionFile(string path);
 
-    ValueTask WriteTransactionMetadataAsync<T>(string path, T value, CancellationToken cancellationToken);
+    ValueTask WriteTransactionMetadataAsync(string path, TransactionMetadata transactionMetadata, CancellationToken cancellationToken);
 
-    ValueTask<T?> GetTransactionMetadataAsync<T>(string path, CancellationToken cancellationToken);
+    ValueTask<TransactionMetadata> ReadTransactionMetadataAsync(string path, bool receipt, CancellationToken cancellationToken);
 
     ValueTask CaptureTransactionSnapshotAsync(string databasePath, string snapshotPath, Func<long, byte[], byte[]> headerFactory, CancellationToken cancellationToken);
 

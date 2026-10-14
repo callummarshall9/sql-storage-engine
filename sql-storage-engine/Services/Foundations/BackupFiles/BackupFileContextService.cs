@@ -91,7 +91,7 @@ internal sealed partial class BackupFileContextService : IBackupFileContextServi
 
         return backupFileContext with
         {
-            Bytes = broker.Serialize(value: backupFileContext.Manifest!, type: typeof(BackupManifest))
+            Bytes = EncodeBackupManifest(backupManifest: backupFileContext.Manifest!)
         };
     });
 
@@ -102,7 +102,7 @@ internal sealed partial class BackupFileContextService : IBackupFileContextServi
 
         return backupFileContext with
         {
-            Manifest = (BackupManifest? )broker.Deserialize(value: backupFileContext.Bytes!, type: typeof(BackupManifest))
+            Manifest = DecodeBackupManifest(bytes: backupFileContext.Bytes!)
         };
     });
 
@@ -129,7 +129,7 @@ internal sealed partial class BackupFileContextService : IBackupFileContextServi
 
         return backupFileContext with
         {
-            Bytes = await broker.ReadBytesAsync(path: backupFileContext.Path!, cancellationToken: cancellationToken)
+            Bytes = await broker.ReadBytesAsync(path: backupFileContext.Path!, maximumBytes: BackupMetadataFormat.MaximumBytes, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false)
         };
     });
@@ -205,25 +205,25 @@ internal sealed partial class BackupFileContextService : IBackupFileContextServi
         };
     });
 
-    public BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
 
         return backupFileContext with
         {
-            Bytes = broker.Serialize(value: backupFileContext.ValueSource!, type: backupFileContext.ValueType!)
+            Bytes = EncodeBackupTimeline(backupTimeline: backupFileContext.Timeline!)
         };
     });
 
-    public BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
 
         return backupFileContext with
         {
-            ValueResult = broker.Deserialize(value: backupFileContext.Bytes!, type: backupFileContext.ValueType!)
+            Timeline = DecodeBackupTimeline(bytes: backupFileContext.Bytes!)
         };
     });
 }

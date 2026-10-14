@@ -23,6 +23,8 @@ public sealed class OfflineBackupTests
         await File.WriteAllBytesAsync(paths.Wal, WalRecordExposure.WriteWalRecord(new WalRecord { Lsn = new sql_storage_engine.Models.Identifiers.LogSequenceNumber { Value = 7 }, PreviousLsn = default, TransactionId = new sql_storage_engine.Models.Identifiers.TransactionId { Value = 1 }, Type = WalRecordType.Commit, Payload = ReadOnlyMemory<byte>.Empty }));
         var manager = Manager();
         var manifest = await manager.CreateBackupManifestAsync(paths.Database,[paths.Wal],paths.Backup);
+        File.Exists(Path.Combine(paths.Backup, "manifest.bin")).Should().BeTrue();
+        File.Exists(Path.Combine(paths.Backup, "manifest.json")).Should().BeFalse();
         manifest.DatabaseId.Should().Be(identity);
         manifest.FormatVersion.Should().Be(sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion);
         manifest.PageSize.Should().Be(sql_storage_engine.Models.Pages.PageConstants.DefaultSize);

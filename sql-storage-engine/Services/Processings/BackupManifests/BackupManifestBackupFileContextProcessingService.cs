@@ -13,7 +13,7 @@ using sql_storage_engine.Storage;
 namespace sql_storage_engine.Services.Processings.BackupManifests;
 internal sealed partial class BackupManifestBackupFileContextProcessingService : IBackupManifestBackupFileContextProcessingService
 {
-    private const int MaximumManifestBytes = 1024 * 1024;
+    private const int MaximumManifestBytes = BackupMetadataFormat.MaximumBytes;
     private readonly BackupFileContextService files;
     public BackupManifestBackupFileContextProcessingService(BackupFileContextService files)
     {
@@ -47,7 +47,7 @@ internal sealed partial class BackupManifestBackupFileContextProcessingService :
         var decoded = files.DeserializeManifestBackupFileContext(backupFileContext: read);
         var manifest = decoded.Manifest ?? throw new StorageFormatException(message: "Backup manifest is empty.");
 
-        if (!Enum.IsDefined(value: (sql_storage_engine.Models.Pages.PageSize)manifest.PageSize) || manifest.Files.Count is 0 or > 1024 || manifest.Files.Any(predicate: file => file.Size < 0 || file.Name != files.ReadFileNameBackupFileContext(backupFileContext: new BackupFileContext { Path = file.Name })
+        if (!Enum.IsDefined(value: (sql_storage_engine.Models.Pages.PageSize)manifest.PageSize) || manifest.Files.Count is 0 or > BackupMetadataFormat.MaximumFiles || manifest.Files.Any(predicate: file => file.Size < 0 || file.Name != files.ReadFileNameBackupFileContext(backupFileContext: new BackupFileContext { Path = file.Name })
             .TextResult || file.Sha256.Length != 64) || manifest.Files.Count(predicate: file => file.Kind == "database") != 1)
         {
             throw new StorageFormatException(message: "Backup manifest fields are invalid.");

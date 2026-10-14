@@ -24,6 +24,9 @@ public sealed class FileFormatUpgradeTests
         MakeLegacy(paths.Database,0);
         var manager = new FileFormatUpgradeExposure();
         await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database,paths.Backup,afterBoundary: (_, _) => throw new SimulatedProcessTerminationException(new CrashTermination { Boundary = CrashBoundary.PageWrite, Ordinal = 0 })))).Should().ThrowAsync<SimulatedProcessTerminationException>();
+        File.Exists(paths.Database + ".upgrade.bin").Should().BeTrue();
+        (await File.ReadAllBytesAsync(paths.Database + ".upgrade.bin")).Length.Should().Be(60);
+        File.Exists(paths.Database + ".upgrade.json").Should().BeFalse();
         await manager.UpgradeAsync(paths.Database,paths.Backup,integrityCheck: async (path, token) =>
         {
             await using sql_storage_engine.Exposures.Pages.PageDatabaseExposure database = await sql_storage_engine.Exposures.Pages.PageDatabaseExposure.OpenAsync(path,DatabaseOpenMode.ReadOnly,token);
@@ -46,7 +49,7 @@ public sealed class FileFormatUpgradeTests
         var before = await File.ReadAllBytesAsync(paths.Database);
         await ((Func<Task>)(async () => await new FileFormatUpgradeExposure().UpgradeAsync(paths.Database,paths.Backup,target))).Should().ThrowAsync<StorageException>();
         (await File.ReadAllBytesAsync(paths.Database)).Should().Equal(before);
-        File.Exists(paths.Database + ".upgrade.json").Should().BeFalse();
+        File.Exists(paths.Database + ".upgrade.bin").Should().BeFalse();
     }
 
     [Test]
@@ -59,6 +62,20 @@ public sealed class FileFormatUpgradeTests
         await ((Func<Task>)(async () => await manager.UpgradeAsync(paths.Database, paths.Backup, integrityCheck: (_, _) => Task.FromResult(false)))).Should().ThrowAsync<StorageCorruptionException>();
         manager.ReadCurrentProgress()!.Status.Should().Be(UpgradeStatus.Failed);
         manager.ReadActivity().Should().Contain("integrity:failed");
+    }
+
+    [Test]
+    public async Task LegacyJsonProgressFailsClosedWithoutRestartingUpgrade()
+    {
+        using var paths = new Paths();
+        await CreateSourceAndBackup(paths);
+        MakeLegacy(paths.Database, 0);
+        var before = await File.ReadAllBytesAsync(paths.Database);
+        await File.WriteAllTextAsync(paths.Database + ".upgrade.json", "{}");
+        await ((Func<Task>)(async () => await new FileFormatUpgradeExposure().UpgradeAsync(paths.Database, paths.Backup))).Should().ThrowAsync<StorageFormatException>().WithMessage("*Legacy JSON upgrade progress is unsupported*");
+        (await File.ReadAllBytesAsync(paths.Database)).Should().Equal(before);
+        File.Exists(paths.Database + ".upgrade.bin").Should().BeFalse();
+        File.Exists(paths.Database + ".upgrade.json").Should().BeTrue();
     }
 
     private static async Task CreateSourceAndBackup(Paths paths)

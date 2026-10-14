@@ -11,7 +11,7 @@ using sql_storage_engine.Services.Managements.Backups;
 namespace sql_storage_engine.Exposures.Backups;
 public sealed class OfflineBackupExposure : ICompositionExposure, IPhysicalBackupExposure
 {
-    public const string ManifestFileName = "manifest.json";
+    public const string ManifestFileName = "manifest.bin";
     private readonly BackupContextManagementService service;
     public OfflineBackupExposure()
     {
@@ -27,8 +27,8 @@ public sealed class OfflineBackupExposure : ICompositionExposure, IPhysicalBacku
         new BackupServiceBinding
     {
         Source = service,
-        Configuration = (BackupConfiguration)service.ReadBackupFileContextBinding(backupFileContext: new BackupFileContext())
-            .ValueSource!
+        Configuration = service.ReadBackupFileContextBinding(backupFileContext: new BackupFileContext())
+            .Configuration!
     };
 
     public async Task<BackupManifest> CreateBackupManifestAsync(string databasePath, IEnumerable<string> walPaths, string destinationDirectory, CancellationToken cancellationToken = default) =>

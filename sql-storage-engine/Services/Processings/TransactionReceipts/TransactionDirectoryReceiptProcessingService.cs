@@ -4,6 +4,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 using sql_storage_engine.Models;
+using sql_storage_engine.Models.Transactions;
 using sql_storage_engine.Services.Foundations.TransactionDirectories;
 
 namespace sql_storage_engine.Services.Processings.TransactionReceipts;
@@ -25,8 +26,14 @@ internal sealed partial class TransactionDirectoryReceiptProcessingService(Trans
             };
         }
 
-        var receipt = await transactionDirectoryService.GetTransactionMetadataAsync<StorageTransactionReceipt>(path: receiptPath, cancellationToken: cancellationToken)
+        var metadata = await transactionDirectoryService.ReadTransactionMetadataAsync(path: receiptPath, receipt: true, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
+
+        var receipt = new StorageTransactionReceipt
+        {
+            Identity = metadata.Identity,
+            State = metadata.State!.Value
+        };
 
         ValidateReceiptContent(storageTransactionReceipt: receipt, expectedStorageTransactionReceipt: storageTransactionReceipt);
         return receipt!;
@@ -38,7 +45,7 @@ internal sealed partial class TransactionDirectoryReceiptProcessingService(Trans
         ValidateReceiptRequest(path: path, storageTransactionReceipt: storageTransactionReceipt, cancellationToken: cancellationToken);
         ValidateReceiptContent(storageTransactionReceipt: storageTransactionReceipt, expectedStorageTransactionReceipt: storageTransactionReceipt);
 
-        await transactionDirectoryService.WriteTransactionMetadataAsync(path: GetReceiptPath(path: path, storageTransactionReceipt: storageTransactionReceipt), value: storageTransactionReceipt, cancellationToken: cancellationToken)
+        await transactionDirectoryService.WriteTransactionMetadataAsync(path: GetReceiptPath(path: path, storageTransactionReceipt: storageTransactionReceipt), transactionMetadata: new TransactionMetadata { Identity = storageTransactionReceipt.Identity, State = storageTransactionReceipt.State }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     });
 

@@ -64,10 +64,14 @@ internal sealed partial class TransactionDirectoryStatementJournalProcessingServ
         ArgumentNullException.ThrowIfNull(argument: reloadHeader);
     }
 
-    private static void ValidateStatementJournalMetadata<T>(string path, T value, CancellationToken cancellationToken)
+    private static void ValidateStatementJournalMetadata(string path, Guid transactionId, Guid databaseId, CancellationToken cancellationToken)
     {
         ValidateSnapshotPath(path: path, cancellationToken: cancellationToken);
-        ArgumentNullException.ThrowIfNull(argument: value);
+
+        if (transactionId == Guid.Empty || databaseId == Guid.Empty)
+        {
+            throw new ArgumentException(message: "A transaction identity is required.");
+        }
     }
 
     private static void ValidateJournalFile(string path)

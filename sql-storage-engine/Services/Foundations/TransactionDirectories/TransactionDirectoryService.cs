@@ -2,6 +2,7 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using sql_storage_engine.Brokers.Directories;
+using sql_storage_engine.Models.Transactions;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,22 +45,24 @@ internal sealed partial class TransactionDirectoryService(TransactionDirectoryBr
         return transactionDirectoryBroker.FileExists(path: path);
     });
 
-    public ValueTask WriteTransactionMetadataAsync<T>(string path, T value, CancellationToken cancellationToken) =>
+    public ValueTask WriteTransactionMetadataAsync(string path, TransactionMetadata transactionMetadata, CancellationToken cancellationToken) =>
         TryCatch(operation: async () =>
     {
-        ValidateTransactionMetadata(path: path, value: value, cancellationToken: cancellationToken);
+        ValidateTransactionMetadata(path: path, transactionMetadata: transactionMetadata, cancellationToken: cancellationToken);
 
-        await transactionDirectoryBroker.WriteJsonAsync(path: path, value: value, cancellationToken: cancellationToken)
+        await transactionDirectoryBroker.WriteMetadataBytesAsync(path: path, bytes: EncodeMetadata(transactionMetadata: transactionMetadata), cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     });
 
-    public ValueTask<T?> GetTransactionMetadataAsync<T>(string path, CancellationToken cancellationToken) =>
+    public ValueTask<TransactionMetadata> ReadTransactionMetadataAsync(string path, bool receipt, CancellationToken cancellationToken) =>
         TryCatch(operation: async () =>
     {
-        ValidateTransactionMetadataOnGet(path: path, cancellationToken: cancellationToken);
+        ValidateTransactionMetadataOnGet(path: path, receipt: receipt, cancellationToken: cancellationToken);
 
-        return await transactionDirectoryBroker.ReadJsonAsync<T>(path: path, cancellationToken: cancellationToken)
+        var bytes = await transactionDirectoryBroker.ReadMetadataBytesAsync(path: path, length: TransactionMetadataFormat.EncodedLength, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
+
+        return DecodeMetadata(bytes: bytes, receipt: receipt);
     });
 
     internal static TransactionDirectoryService CreateTransactionDirectoryService() =>

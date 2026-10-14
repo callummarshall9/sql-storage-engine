@@ -42,7 +42,7 @@ internal sealed partial class BackupContextManagementService : IBackupContextMan
 
         return backupFileContext with
         {
-            ValueSource = configuration
+            Configuration = configuration
         };
     });
 
@@ -351,7 +351,7 @@ internal sealed partial class BackupContextManagementService : IBackupContextMan
 
         var newTimeline = checked(timeline + 1);
 
-        await fileService.WriteBackupFileContextValueAsync(backupFileContext: new BackupFileContext { Path = ReadCombinedPath(path1: destinationDirectory, path2: "timeline.json"), ValueType = typeof(BackupTimeline), ValueSource = new BackupTimeline { DatabaseId = manifest.DatabaseId.Value, Timeline = newTimeline, ParentTimeline = timeline, ForkLsn = targetLsn.Value } }, cancellationToken: cancellationToken)
+        await fileService.WriteBackupFileContextTimelineAsync(backupFileContext: new BackupFileContext { Path = ReadCombinedPath(path1: destinationDirectory, path2: "timeline.bin"), Timeline = new BackupTimeline { DatabaseId = manifest.DatabaseId.Value, Timeline = newTimeline, ParentTimeline = timeline, ForkLsn = targetLsn.Value } }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
 
         return new PointInTimeRestoreResult

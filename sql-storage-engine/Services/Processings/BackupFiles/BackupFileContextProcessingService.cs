@@ -88,18 +88,18 @@ internal sealed partial class BackupFileContextProcessingService : IBackupFileCo
         return files.RemoveDirectoryBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.SerializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.SerializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.DeserializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.DeserializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
     public ValueTask<BackupFileContext> ReadBytesBackupFileContextAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>

@@ -96,27 +96,18 @@ public sealed class IdentifierTests
     }
 
     [Test]
-    public void CompoundIdentifierJsonRoundTripPreservesEveryComponent()
+    public void CompoundIdentifierEqualityDistinguishesEveryComponent()
     {
         var rowId = new RowId
         {
-            PageId = new PageId
-            {
-                Value = ulong.MaxValue
-            },
-            SlotId = new SlotId
-            {
-                Value = ushort.MaxValue
-            },
-            Generation = new SlotGeneration
-            {
-                Value = uint.MaxValue
-            }
+            PageId = new PageId { Value = ulong.MaxValue },
+            SlotId = new SlotId { Value = ushort.MaxValue },
+            Generation = new SlotGeneration { Value = uint.MaxValue }
         };
-        var json = System.Text.Json.JsonSerializer.Serialize(rowId);
-        System.Text.Json.JsonSerializer.Deserialize<RowId>(json).Should().Be(rowId);
-        var databaseId = DatabaseIdExposure.CreateDatabaseId();
-        var databaseJson = System.Text.Json.JsonSerializer.Serialize(databaseId);
-        System.Text.Json.JsonSerializer.Deserialize<DatabaseId>(databaseJson).Should().Be(databaseId);
+        var rows = new HashSet<RowId> { rowId };
+        rows.Contains(rowId).Should().BeTrue();
+        rows.Contains(rowId with { PageId = new PageId { Value = 0 } }).Should().BeFalse();
+        rows.Contains(rowId with { SlotId = new SlotId { Value = 0 } }).Should().BeFalse();
+        rows.Contains(rowId with { Generation = new SlotGeneration { Value = 0 } }).Should().BeFalse();
     }
 }

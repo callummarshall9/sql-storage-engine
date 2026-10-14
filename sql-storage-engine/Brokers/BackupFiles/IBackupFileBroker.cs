@@ -24,11 +24,15 @@ internal interface IBackupFileBroker
 
     DateTimeOffset ReadUtcNow();
 
-    byte[] Serialize(object value, Type type);
+    int CountUtf8Bytes(string value);
 
-    object? Deserialize(byte[] value, Type type);
+    byte[] EncodeUtf8(string value);
 
-    ValueTask<byte[]> ReadBytesAsync(string path, CancellationToken cancellationToken);
+    string DecodeUtf8(byte[] bytes);
+
+    byte[] HashBytes(byte[] bytes);
+
+    ValueTask<byte[]> ReadBytesAsync(string path, int maximumBytes, CancellationToken cancellationToken);
 
     ValueTask WriteBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken);
 

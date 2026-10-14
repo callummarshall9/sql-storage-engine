@@ -20,6 +20,10 @@ internal sealed partial class BackupFileContextService
         {
             throw MapKnownException(caughtException: exception);
         }
+        catch (System.IO.InvalidDataException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
+        }
         catch (StorageResourceException exception)
         {
             throw new BackupDependencyException(innerException: exception);
@@ -56,6 +60,10 @@ internal sealed partial class BackupFileContextService
         catch (Exception exception)when (IsKnownException(exception: exception))
         {
             throw MapKnownException(caughtException: exception);
+        }
+        catch (System.IO.InvalidDataException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
         }
         catch (StorageResourceException exception)
         {

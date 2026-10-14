@@ -20,14 +20,18 @@ internal sealed partial class UpgradeProgressOrchestrationService : IUpgradeProg
         TryCatch(operation: async () =>
     {
         ValidateUpgradeContext(upgradeContext: upgradeContext, cancellationToken: cancellationToken);
-        var path = upgradeContext.DatabasePath + ".upgrade.json";
+
+        if (files.ExistsTransactionFile(path: upgradeContext.DatabasePath + ".upgrade.json"))
+        {
+            throw new StorageFormatException(message: "Legacy JSON upgrade progress is unsupported; the interrupted upgrade must not be restarted.");
+        }
+
+        var path = upgradeContext.DatabasePath + ".upgrade.bin";
 
         if (files.ExistsTransactionFile(path: path))
         {
-            var bytes = await files.ReadTransactionSnapshotBytesAsync(path: path, cancellationToken: cancellationToken)
-            .ConfigureAwait(continueOnCapturedContext: false);
-
-            return states.DecodeUpgradeContext(upgradeContext: upgradeContext with { Bytes = bytes });
+            return await states.ReadUpgradeContextAsync(upgradeContext: upgradeContext, cancellationToken: cancellationToken)
+                .ConfigureAwait(continueOnCapturedContext: false);
         }
 
         if (upgradeContext.SourceVersion is not (0 or DatabaseHeaderFormat.CurrentVersion))
@@ -54,7 +58,7 @@ internal sealed partial class UpgradeProgressOrchestrationService : IUpgradeProg
         ValidateUpgradeContext(upgradeContext: upgradeContext, cancellationToken: cancellationToken);
         var encoded = states.EncodeUpgradeContext(upgradeContext: upgradeContext);
 
-        await files.PublishTransactionSnapshotBytesAsync(path: upgradeContext.DatabasePath + ".upgrade.json", bytes: encoded.Bytes!, cancellationToken: cancellationToken)
+        await files.PublishTransactionSnapshotBytesAsync(path: upgradeContext.DatabasePath + ".upgrade.bin", bytes: encoded.Bytes!, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     });
 }

@@ -2,6 +2,7 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using System;
+using System.Threading;
 using sql_storage_engine.Models.Diagnostics;
 
 using sql_storage_engine.Storage;
@@ -12,6 +13,12 @@ internal sealed partial class UpgradeStateService
     private static void ValidateUpgradeContextDecode(UpgradeContext upgradeContext) =>
         Validate(inputs: [(upgradeContext is null, nameof(upgradeContext)), (upgradeContext?.Bytes is null, nameof(UpgradeContext.Bytes))]);
 
+    private static void ValidateUpgradeContextRead(UpgradeContext upgradeContext, CancellationToken cancellationToken)
+    {
+        Validate(inputs: [(upgradeContext is null, nameof(upgradeContext)), (string.IsNullOrWhiteSpace(value: upgradeContext?.DatabasePath), nameof(UpgradeContext.DatabasePath))]);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
     private static void ValidateUpgradeContextEncode(UpgradeContext upgradeContext)
     {
         Validate(inputs: [(upgradeContext is null, nameof(upgradeContext)), (upgradeContext?.Progress is null, nameof(UpgradeContext.Progress))]);
@@ -20,7 +27,7 @@ internal sealed partial class UpgradeStateService
 
     private static void ValidateUpgradeProgress(UpgradeProgress upgradeProgress, ushort targetVersion)
     {
-        if (upgradeProgress.TargetVersion != targetVersion || upgradeProgress.SourceVersion > sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion || upgradeProgress.NextStep is < 0 or > 1 || !Enum.IsDefined(value: upgradeProgress.Status))
+        if (upgradeProgress.TargetVersion != targetVersion || upgradeProgress.SourceVersion is not (0 or sql_storage_engine.Models.Pages.DatabaseHeaderFormat.CurrentVersion) || upgradeProgress.NextStep is < 0 or > 1 || !Enum.IsDefined(value: upgradeProgress.Status))
         {
             throw new sql_storage_engine.Storage.StorageFormatException(message: "Upgrade progress does not describe a supported migration.");
         }

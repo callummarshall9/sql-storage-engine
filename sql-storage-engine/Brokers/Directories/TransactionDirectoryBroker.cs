@@ -1,6 +1,7 @@
 // ---------------------------------------------------------------
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
+using System;
 using sql_storage_engine.Dependencies.Directories;
 using System.Collections.Generic;
 using System.Threading;
@@ -39,19 +40,19 @@ internal sealed partial class TransactionDirectoryBroker : ITransactionDirectory
         return directory.FileExists(path: path);
     }
 
-    public async ValueTask WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken)
+    public async ValueTask WriteMetadataBytesAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken)
     {
         using var directory = new TransactionDirectoryDependency();
 
-        await directory.WriteJsonAsync(path: path, value: value, cancellationToken: cancellationToken)
+        await directory.WriteMetadataBytesAsync(path: path, bytes: bytes, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 
-    public async ValueTask<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
+    public async ValueTask<byte[]> ReadMetadataBytesAsync(string path, int length, CancellationToken cancellationToken)
     {
         using var directory = new TransactionDirectoryDependency();
 
-        return await directory.ReadJsonAsync<T>(path: path, cancellationToken: cancellationToken)
+        return await directory.ReadMetadataBytesAsync(path: path, length: length, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
     }
 

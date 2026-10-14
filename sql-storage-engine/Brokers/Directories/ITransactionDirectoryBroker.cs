@@ -19,9 +19,9 @@ internal interface ITransactionDirectoryBroker
 
     bool FileExists(string path);
 
-    ValueTask WriteJsonAsync<T>(string path, T value, CancellationToken cancellationToken);
+    ValueTask WriteMetadataBytesAsync(string path, ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken);
 
-    ValueTask<T?> ReadJsonAsync<T>(string path, CancellationToken cancellationToken);
+    ValueTask<byte[]> ReadMetadataBytesAsync(string path, int length, CancellationToken cancellationToken);
 
     ValueTask CaptureSnapshotAsync(string databasePath, string snapshotPath, Func<long, byte[], byte[]> headerFactory, CancellationToken cancellationToken);
 

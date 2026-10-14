@@ -95,18 +95,18 @@ internal sealed partial class BackupFileContextOrchestrationService : IBackupFil
         return files.RemoveDirectoryBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.SerializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.SerializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
-    public BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext) =>
+    public BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext) =>
         TryCatch(operation: () =>
     {
         ValidateBackupFileContext(backupFileContext: backupFileContext);
-        return files.DeserializeValueBackupFileContext(backupFileContext: backupFileContext);
+        return files.DeserializeTimelineBackupFileContext(backupFileContext: backupFileContext);
     });
 
     public ValueTask<BackupFileContext> ReadBytesBackupFileContextAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken) =>
@@ -162,8 +162,10 @@ internal sealed partial class BackupFileContextOrchestrationService : IBackupFil
         var fullDirectory = files.ReadFullPathBackupFileContext(backupFileContext: new BackupFileContext { Path = backupFileContext.Directory })
             .TextResult!;
 
-        var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = fullDirectory, Name = "manifest.json" })
+        var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = fullDirectory, Name = "manifest.bin" })
             .TextResult!;
+
+        RequireBinaryManifest(directory: fullDirectory, path: path);
 
         return await manifests.ReadBackupFileContextManifestAsync(backupFileContext: backupFileContext with { Path = path }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
@@ -177,7 +179,7 @@ internal sealed partial class BackupFileContextOrchestrationService : IBackupFil
         var fullDirectory = files.ReadFullPathBackupFileContext(backupFileContext: new BackupFileContext { Path = backupFileContext.Directory })
             .TextResult!;
 
-        var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = fullDirectory, Name = "manifest.json" })
+        var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = fullDirectory, Name = "manifest.bin" })
             .TextResult!;
 
         return await manifests.WriteBackupFileContextManifestAsync(backupFileContext: backupFileContext with { Path = path }, cancellationToken: cancellationToken)
@@ -196,13 +198,15 @@ internal sealed partial class BackupFileContextOrchestrationService : IBackupFil
             var directory = files.ReadFullPathBackupFileContext(backupFileContext: new BackupFileContext { Path = backupFileContext.Directory })
             .TextResult!;
 
-            var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = directory, Name = "manifest.json" })
+            var path = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = directory, Name = "manifest.bin" })
             .TextResult!;
+
+            RequireBinaryManifest(directory: directory, path: path);
 
             read = await manifests.ReadBackupFileContextManifestAsync(backupFileContext: backupFileContext with { Path = path }, cancellationToken: cancellationToken)
             .ConfigureAwait(continueOnCapturedContext: false);
         }
-        catch (Exception exception)when (exception is System.IO.IOException or System.Text.Json.JsonException or StorageException)
+        catch (Exception exception)when (exception is System.IO.IOException or StorageException)
         {
             return backupFileContext with
             {
@@ -261,4 +265,18 @@ internal sealed partial class BackupFileContextOrchestrationService : IBackupFil
             }
         };
     });
+
+    private void RequireBinaryManifest(string directory, string path)
+    {
+        if (!files.ReadExistenceBackupFileContext(backupFileContext: new BackupFileContext { Path = path }).Exists)
+        {
+            var legacyPath = files.ReadCombinedPathBackupFileContext(backupFileContext: new BackupFileContext { Directory = directory, Name = "manifest.json" })
+                .TextResult!;
+
+            if (files.ReadExistenceBackupFileContext(backupFileContext: new BackupFileContext { Path = legacyPath }).Exists)
+            {
+                throw new StorageFormatException(message: "Legacy JSON backups are unsupported; create a new binary backup.");
+            }
+        }
+    }
 }

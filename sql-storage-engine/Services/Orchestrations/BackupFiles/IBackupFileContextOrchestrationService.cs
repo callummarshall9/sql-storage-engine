@@ -28,9 +28,9 @@ internal interface IBackupFileContextOrchestrationService
 
     BackupFileContext RemoveDirectoryBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext SerializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext SerializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 
-    BackupFileContext DeserializeValueBackupFileContext(BackupFileContext backupFileContext);
+    BackupFileContext DeserializeTimelineBackupFileContext(BackupFileContext backupFileContext);
 
     ValueTask<BackupFileContext> ReadBytesBackupFileContextAsync(BackupFileContext backupFileContext, CancellationToken cancellationToken);
 

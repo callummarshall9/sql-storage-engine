@@ -2,6 +2,7 @@
 // Copyright (c) Callum Marshall
 // ---------------------------------------------------------------
 using System;
+using sql_storage_engine.Storage;
 using System.IO;
 using System.Threading.Tasks;
 using sql_storage_engine.Models.Exceptions;
@@ -18,6 +19,10 @@ internal sealed partial class TransactionDirectoryService
         catch (ArgumentException exception)
         {
             throw new StorageModelValidationException(innerException: exception);
+        }
+        catch (StorageFormatException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
         }
         catch (IOException exception)
         {
@@ -38,6 +43,10 @@ internal sealed partial class TransactionDirectoryService
         catch (ArgumentException exception)
         {
             throw new StorageModelValidationException(innerException: exception);
+        }
+        catch (StorageFormatException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
         }
         catch (IOException exception)
         {
@@ -64,6 +73,10 @@ internal sealed partial class TransactionDirectoryService
         {
             throw new StorageModelValidationException(innerException: exception);
         }
+        catch (StorageFormatException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
+        }
         catch (IOException exception)
         {
             throw new TransactionDirectoryDependencyException(innerException: exception);
@@ -88,6 +101,10 @@ internal sealed partial class TransactionDirectoryService
         catch (ArgumentException exception)
         {
             throw new StorageModelValidationException(innerException: exception);
+        }
+        catch (StorageFormatException exception)
+        {
+            throw new StorageFormatException(message: exception.Message, innerException: exception);
         }
         catch (IOException exception)
         {
